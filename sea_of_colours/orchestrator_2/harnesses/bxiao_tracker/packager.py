@@ -525,6 +525,13 @@ class _Packer:
         self._h_idx = 0
         self._probed_cells: set = set()
         self._drop_cells: set = set()
+        #: bxiao_tracker — ordnance STAGED by the weapon packers and emitted by
+        #: the finalisers once every option has packed. It cannot be emitted at
+        #: dispatch time: options pack in agent order and later ones add more
+        #: fleet movement, so the friendly-fire check has nothing complete to
+        #: test against until the whole recipe is built.
+        self._pending_emp: List[Dict[str, Any]] = []
+        self._pending_snap: List[Dict[str, Any]] = []
         # Part A1 — persistent stripped/GREEN union (fog-surviving). ENGINE FACT:
         # a drop here auto-harvests green for a penalty and banks nothing.
         #
@@ -578,17 +585,26 @@ class _Packer:
     # then fails to compile, those probes were spent for a run that never
     # happened — the card showed exactly that on SNAP_ac1c55bf_d6_p4, where
     # SECURE_MASS was deleted but its probe still fired (OBS-27, fix 2.5).
-    def begin(self) -> Tuple[int, int, set, set, int]:
+    def begin(self) -> Tuple[int, int, set, set, int, list, list]:
         return (len(self.moves), self.probe_budget, set(self._probed_cells),
-                set(self._drop_cells), self._h_idx)
+                set(self._drop_cells), self._h_idx,
+                list(self._pending_emp), list(self._pending_snap))
 
-    def rollback(self, mark: Tuple[int, int, set, set, int]) -> None:
-        n, budget, probed, drops, h_idx = mark
+    def rollback(
+        self, mark: Tuple[int, int, set, set, int, list, list],
+    ) -> None:
+        (n, budget, probed, drops, h_idx,
+         pending_emp, pending_snap) = mark
         del self.moves[n:]
         self.probe_budget = budget
         self._probed_cells = probed
         self._drop_cells = drops
         self._h_idx = h_idx
+        # bxiao_tracker: staged ordnance rolls back with the run that staged
+        # it. Without this a rolled-back option leaves a live missile behind,
+        # aimed at a route the fleet is no longer taking.
+        self._pending_emp = pending_emp
+        self._pending_snap = pending_snap
 
     def _relocate_drop(
         self, drop: Tuple[int, int], comb: Sequence[Any],
@@ -848,6 +864,231 @@ def _is_probe_only(opt: Any) -> bool:
     return False
 
 
+def _fleet_footprint(pk: _Packer) -> set:
+    """Every cell our own fleet occupies tonight, read off the emitted moves.
+
+    bxiao_tracker. The friendly-fire filters need the finished route, and
+    deriving it from ``pk.moves`` rather than tracking it in parallel state is
+    both exact and self-maintaining: a drop is ``{"a":"drop","at":[x,y]}`` and a
+    step is ``{"a":"step","to":[x,y]}``, so the move list IS the footprint by
+    construction. Any option that adds movement later is automatically included,
+    which is the property a hand-maintained set keeps losing.
+    """
+    out: set = set()
+    for mv in pk.moves or []:
+        if not isinstance(mv, Mapping):
+            continue
+        act = str(mv.get("a") or "")
+        cell = mv.get("at") if act == "drop" else (
+            mv.get("to") if act == "step" else None)
+        if isinstance(cell, (list, tuple)) and len(cell) == 2:
+            try:
+                out.add((int(cell[0]), int(cell[1])))
+            except (TypeError, ValueError):
+                continue
+    return out | set(pk._drop_cells)
+
+
+def _pack_emp(pk: _Packer, payload: Mapping[str, Any]) -> None:
+    """Stage an EMP salvo. Emitted later by :func:`_finalise_emp`.
+
+    Wire format: ``{"a": "emp_launch", "at": [[x1,y1],[x2,y2],...]}``.
+    """
+    targets = payload.get("targets") or []
+    if not targets:
+        pk.log.append("cut EMP: no targets in payload")
+        return
+    radius = int(payload.get("radius", 2) or 2)
+    wire = [(int(t[0]), int(t[1])) for t in targets
+            if isinstance(t, (list, tuple)) and len(t) == 2]
+    if not wire:
+        pk.log.append("cut EMP: no valid target coordinates")
+        return
+    pk._pending_emp.append({"targets": wire, "radius": radius})
+    pk.log.append(
+        f"EMP salvo staged: {len(wire)} missile(s) at "
+        + " ".join(f"({x},{y})" for x, y in wire)
+        + " — friendly-fire check runs once the fleet route is final"
+    )
+
+
+def _finalise_emp(pk: _Packer) -> None:
+    """Drop EMP missiles whose blast covers our OWN fleet, then emit at H1.
+
+    A self-hit disables the unit for ~8 hours and risks a dawn crash that spills
+    its whole unlifted load, so it costs far more than the hour or two it takes
+    off a rival. Own PROBES inside the disk are only warned about — a probe is
+    250c and denial can be worth that.
+    """
+    if not pk._pending_emp:
+        return
+    own = _fleet_footprint(pk)
+    kept: List[List[int]] = []
+    # Observed live on d7 of a real season: the salvo went out as
+    # ([13,11],[13,11]) — the same square twice. A second missile on an
+    # already-blinded cell denies nothing, and the rack is capped, so the
+    # duplicate is a warhead thrown away. Dedupe across EVERY staged salvo
+    # rather than within one, because two options can stage the same centre
+    # independently and neither can see the other.
+    seen: set = set()
+    for salvo in pk._pending_emp:
+        radius = int(salvo.get("radius", 2) or 2)
+        for (tx, ty) in salvo.get("targets") or []:
+            if (tx, ty) in seen:
+                pk.log.append(
+                    f"dropped duplicate EMP missile at ({tx},{ty}) — already "
+                    f"aimed there this salvo; a second warhead on a blinded "
+                    f"cell denies nothing"
+                )
+                continue
+            seen.add((tx, ty))
+            disk = {(tx + dx, ty + dy)
+                    for dx in range(-radius, radius + 1)
+                    for dy in range(-radius, radius + 1)}
+            self_hit = sorted(disk & own)
+            if self_hit:
+                pk.log.append(
+                    f"CUT EMP missile ({tx},{ty}) r{radius}: FRIENDLY FIRE — "
+                    f"our own route occupies {self_hit[:4]}"
+                    f"{'...' if len(self_hit) > 4 else ''}. A self-hit disables "
+                    f"the unit ~8h and risks a dawn crash that spills its whole "
+                    f"load; that costs more than the shot gains."
+                )
+                continue
+            probe_hit = sorted(disk & set(pk._probed_cells))
+            if probe_hit:
+                pk.log.append(
+                    f"EMP ({tx},{ty}) also covers our own probe(s) "
+                    f"{probe_hit[:3]} — FIRING ANYWAY (a probe is 250c; "
+                    f"denial is worth more)"
+                )
+            kept.append([tx, ty])
+    pk._pending_emp = []
+    if kept:
+        pk.moves.insert(0, {"a": "emp_launch", "at": kept})
+        pk.log.append(
+            f"EMP salvo compiled: {len(kept)} missile(s) at "
+            + " ".join(f"({t[0]},{t[1]})" for t in kept) + " — inserted at H1"
+        )
+    else:
+        pk.log.append(
+            "EMP salvo cut ENTIRELY: every missile would have caught our own "
+            "fleet. Held the warhead for a night we can aim it clear."
+        )
+
+
+def _pack_snap(pk: _Packer, payload: Mapping[str, Any]) -> None:
+    """Stage a SNAP round. Emitted later by :func:`_finalise_snap`.
+
+    Wire format: ``{"a": "snap_launch", "at": [x, y]}`` — a BARE pair. The
+    engine refuses a list of pairs *by name*, so there is no forgiving path to
+    lean on: one cell or nothing.
+    """
+    target = payload.get("target")
+    if not (isinstance(target, (list, tuple)) and len(target) == 2):
+        pk.log.append("cut SNAP: payload carries no single [x,y] target")
+        return
+    try:
+        tx, ty = int(target[0]), int(target[1])
+    except (TypeError, ValueError):
+        pk.log.append(f"cut SNAP: target {target!r} is not a coordinate pair")
+        return
+    pk._pending_snap.append({
+        "target": (tx, ty),
+        "denies": payload.get("denies"),
+        "denies_purity": payload.get("denies_purity"),
+        "denies_tier": payload.get("denies_tier"),
+        "denies_total": payload.get("denies_total"),
+    })
+    pk.log.append(
+        f"SNAP round staged at ({tx},{ty}) — friendly-fire check runs once the "
+        "fleet route is final"
+    )
+
+
+def _finalise_snap(pk: _Packer) -> None:
+    """Cut SNAP rounds landing on our OWN fleet or beacon, then emit at H1.
+
+    A SNAP stamps its cell HOT for the rest of the hour. Our own harvester that
+    STEPS onto it is crippled where it stands; one that tries to LAND is refused
+    in orbit and damaged. Either way the square is not harvested.
+
+    Unlike the EMP, our own PROBE on the target is fatal rather than acceptable:
+    SNAP hits exactly one cell, so if our probe is on it the round has bought
+    nothing at all and blinded us. There is no denial benefit left to trade
+    against, which is why this CUTS where :func:`_finalise_emp` warns.
+    """
+    if not pk._pending_snap:
+        return
+    own = _fleet_footprint(pk)
+    own_probes = set(pk._probed_cells)
+    kept: List[Dict[str, Any]] = []
+    for rnd in pk._pending_snap:
+        tx, ty = rnd["target"]
+        if (tx, ty) in own:
+            pk.log.append(
+                f"CUT SNAP ({tx},{ty}): FRIENDLY FIRE — our own route occupies "
+                f"that cell. The round stamps it hot for the hour, so our "
+                f"walk-in would be crippled on the square or our landing "
+                f"refused in orbit. Held the round."
+            )
+            continue
+        if (tx, ty) in own_probes:
+            pk.log.append(
+                f"CUT SNAP ({tx},{ty}): that is OUR OWN beacon. SNAP hits one "
+                f"cell and friendly fire is on, so this round would buy nothing "
+                f"and blind us. Held it."
+            )
+            continue
+        kept.append(rnd)
+    pk._pending_snap = []
+    if not kept:
+        return
+    # One round, one cell. If the thinker somehow picked two, fire the richer
+    # denial and say the other was dropped rather than spend stock we may not
+    # hold.
+    kept.sort(key=lambda r: -(int(r.get("denies_total") or 0)
+                              or int(r.get("denies_purity") or 0)))
+    best = kept[0]
+    tx, ty = best["target"]
+    pk.moves.insert(0, {"a": "snap_launch", "at": [tx, ty]})
+    denies = best.get("denies")
+    where = (
+        f" — denies their drop on {best.get('denies_tier') or 'rich'} "
+        f"purity-{best.get('denies_purity')} at ({denies[0]},{denies[1]})"
+        if isinstance(denies, (list, tuple)) and len(denies) == 2 else ""
+    )
+    pk.log.append(
+        f"SNAP compiled at ({tx},{ty}){where} — inserted at H1, above the "
+        f"hour's vision snapshot"
+    )
+    for extra in kept[1:]:
+        pk.log.append(
+            f"dropped extra SNAP at {extra['target']} — one round, one cell; "
+            f"fired the richer denial instead"
+        )
+
+
+def _pack_weapon(pk: _Packer, payload: Mapping[str, Any]) -> None:
+    """Route a weapon option to its own packer by the ``weapon`` field.
+
+    Dispatching on the payload rather than binding the kind straight to one
+    weapon, because SNAP and EMP have different wire shapes (a bare pair vs a
+    list) and different friendly-fire rules. An unknown weapon is REFUSED
+    loudly — firing the wrong ordnance is worse than firing none.
+    """
+    kind = str(payload.get("weapon") or "emp").strip().lower()
+    if kind == "snap":
+        _pack_snap(pk, payload)
+    elif kind == "emp":
+        _pack_emp(pk, payload)
+    else:
+        pk.log.append(
+            f"cut weapon option: unknown weapon {kind!r} — this build packs "
+            f"'emp' and 'snap' only"
+        )
+
+
 _DISPATCH = {
     "seam": _pack_seam,
     "hotdrop": _pack_hotdrop,
@@ -859,6 +1100,7 @@ _DISPATCH = {
     "probe": _pack_probe,
     "supersede": _pack_supersede,
     "frontier": _pack_frontier,
+    "weapon": _pack_weapon,
 }
 
 
@@ -1006,4 +1248,8 @@ def pack_recipe(
             probe_hints=probe_hints,
             supersede_hints=supersede_hints,
         )
+    # bxiao_tracker: LAST, so the friendly-fire filters see every cell the
+    # fleet will occupy — including anything a later option added.
+    _finalise_emp(pk)
+    _finalise_snap(pk)
     return pk.moves, pk.log

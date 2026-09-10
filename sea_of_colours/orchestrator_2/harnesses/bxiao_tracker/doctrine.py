@@ -823,7 +823,86 @@ WEAPONS => MORE UNITS ON THE SEAM, NOT ONE SHORTER CHAIN (offensive read):
 """
 
 
+DOCTRINE_WEAPONS_OFFENSIVE = """\
+FIRE YOUR EMP — the DEFAULT is to fire, not to hold:
+  You hold EMP charges. They are paid for (BLUE sunk cost in orbit). Firing
+  costs ONE action slot (1 hour of your 21). A charge you HOLD gains nothing —
+  it does not accrue interest. A charge you FIRE denies the rival a full night
+  of vision. The bias is: FIRE unless a specific reason says hold.
+
+  FIRE WHEN (any of these — one reason is enough):
+    * A rival has ANY probes visible on the map. An early salvo (H1) blinds
+      those probes for the full night — the rival loses vision and cannot
+      hot-drop into your territory for 8 hours.
+    * Multiple rival probes cluster within one blast radius. One salvo that
+      darkens 2-3 probes at once is a tempo bargain.
+    * You have held the EMP for 2+ nights without firing. Every night you
+      hold is a night you could have denied — the opportunity cost compounds.
+      USE IT OR LOSE IT: fire now, the BLUE is already spent.
+    * You have more harvesters than the board can profitably employ (>=3 in
+      orbit, only 1-2 strong chains). An idle harvester gains nothing; an
+      EMP that costs one hour but blinds a rival's recon is a net gain.
+    * EMP_SCORCH appears on the OPTION MENU — SELECT IT. It has pre-targeted
+      coordinates aimed at rival probes. Put it in your plan alongside your
+      harvest chains. It fires at H1 automatically.
+
+  HOLD ONLY WHEN (must be specific, not vague caution):
+    * No rival probes are visible at all — the missiles hit empty dirt.
+    * It is the LAST night and every hour of harvesting counts more than
+      denial (points are final; opponent vision is moot after Aurora).
+
+  TEMPO:
+    * Launch at H1. Early = maximum denial.
+    * 1 salvo = 1 move = 1 hour. Budget it alongside your chains.
+"""
+
+
+DOCTRINE_WEAPONS_SNAP = """\
+SNAP — THE LANDING DENIAL (v1.36). A DIFFERENT WEAPON, NOT A SMALL EMP.
+
+  THE ONE RULE THAT MATTERS: a SNAP resolves ABOVE the hour's vision
+  snapshot; an EMP resolves BELOW it. A drop needs LIVE sensor coverage.
+  So a beacon you kill with a SNAP was never recorded as lit, and the
+  rival landing that square was lighting is REFUSED TONIGHT. The same
+  beacon killed by an EMP was already written down as lit, and their
+  landing STANDS. This is the answer to smash-and-grab.
+
+  WHY IT IS OUR WEAPON, from our own record: we take 12 pure parcels to
+  V12's 25, and 73 mass to their 105, while vein is a dead heat. Every
+  board holds exactly TWO pure cells, so the squares that decide a
+  season are always contested. On seed 1717 day 6 we walked into ground
+  V12 had already stripped and paid -300 plus three wasted hold slots.
+  Denying their landing is that same fight, won a night earlier.
+
+  FIRE WHEN:
+    * SNAP_DENY is on the OPTION MENU — SELECT IT. It is pre-aimed at the
+      rival beacon whose vision disk covers the richest RED ground, and
+      the menu title names the ore it denies.
+    * A rival beacon is lighting pure or mass you also want. One round
+      turns their sure landing into no landing.
+
+  HOLD WHEN:
+    * No rival beacon overlooks anything richer than vein — a SNAP on a
+      trace square is a wasted round. Firing it at the middle of the map
+      says exactly as much as not firing it at all.
+
+  DISCIPLINE:
+    * ONE CELL. The engine refuses a list of coordinates by name.
+    * Friendly fire is ON. A round on our own beacon blinds us; a round
+      on our own route cripples the walk-in or turns back the landing.
+      The packager cuts both automatically — but do not aim there.
+    * Chaff outranks it: a jammed hour launches nothing and the charge
+      stays in stock.
+    * Cheapest round in the game — 100 blue against the EMP's 200 and the
+      chaff's 300. The ARSENAL CAP is 600 blue total, so two chaff fill
+      the whole rack and lock everything else out.
+"""
+
+
+
 __all__ = [
+    "DOCTRINE_WEAPONS_OFFENSIVE",
+    "DOCTRINE_WEAPONS_SNAP",
     "STRATEGIES_CORE",
     "DOCTRINE_BLUE",
     "DOCTRINE_REDSIGN",

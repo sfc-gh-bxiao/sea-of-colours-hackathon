@@ -40,9 +40,22 @@ _MOVE_ITEM = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "a": {"type": "string", "enum": ["drop", "step", "pickup", "probe"]},
+        # bxiao_tracker RUNG 2. Stock V12 permits only the four harvest verbs,
+        # so a model that WANTED to fire could not express it — the schema is
+        # the binding half of the instruction, and under Cortex strict mode a
+        # verb absent from this enum is a request the model is not allowed to
+        # make. Adding the option menu and the packager without this changes
+        # nothing observable, which is why the readiness ladder puts it here.
+        "a": {"type": "string", "enum": [
+            "drop", "step", "pickup", "probe",
+            "emp_launch", "snap_launch",
+        ]},
         "unit": {"type": "string"},
-        "at": _CELL,
+        # EMP takes a LIST of aim points (one salvo, several missiles); SNAP
+        # takes a bare pair and the engine refuses a list BY NAME. So the
+        # schema has to admit both shapes here, and the per-weapon packer is
+        # what enforces which one applies.
+        "at": {"oneOf": [_CELL, {"type": "array", "items": _CELL}]},
         "to": _CELL,
     },
     "required": ["a"],

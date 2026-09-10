@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import Any, List, Mapping, Sequence
 
 from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker import (
-    digest, doctrine, option_economics, out_of_grid, rules, world_view,
+    digest, doctrine, option_economics, out_of_grid, rules, scorch, world_view,
 )
 from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker._v7.orbit_wishlist import (
     Wishlist,
@@ -1063,6 +1063,26 @@ def _assemble_doctrine(
         text += "\n\n" + doctrine.DOCTRINE_BEWARE_CHAFF
     if opp_has_snap or was_snapped:
         text += "\n\n" + doctrine.DOCTRINE_BEWARE_SNAP
+
+    # bxiao_tracker RUNG 4 — the OFFENSIVE case.
+    #
+    # Everything above is about SURVIVING someone else's ordnance, which stock
+    # V12 does well. What it never learns is to spend its own: it buys a rack
+    # and the night phase is never told to reach for it. An option nobody is
+    # told to want stays unwanted, however well built it is.
+    #
+    # Gated per weapon on what the seat ACTUALLY HOLDS, via scorch.py rather
+    # than the orbit view, so the prompt never urges a shot the rack cannot
+    # make — and the two get separate gates because the 600-blue cap fits one
+    # of each, so holding a SNAP is no evidence of holding an EMP.
+    #
+    # Skipped on redsign nights: the redsign poker doctrine is the higher-value
+    # read on those, and two competing 40-line briefs make both weaker.
+    redsign_active = bool(agent_view.get("redsign"))
+    if scorch.has_emp(agent_view) and not redsign_active:
+        text += "\n\n" + doctrine.DOCTRINE_WEAPONS_OFFENSIVE
+    if scorch.has_snap(agent_view) and not redsign_active:
+        text += "\n\n" + doctrine.DOCTRINE_WEAPONS_SNAP
 
     # FINAL NIGHT — supersede enemy probes. Gated to the ACTUAL final night
     # (A6): earlier nights must not see this or the agent starts declaring

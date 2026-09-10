@@ -148,6 +148,60 @@ def _autofill_on() -> bool:
     )
 
 
+_EMP_RELEVANCE_R = 6
+
+
+def _plan_cells(selected_options: Sequence[Any]) -> List[Tuple[int, int]]:
+    """Every cell tonight's selected options intend to land on or walk."""
+    out: List[Tuple[int, int]] = []
+
+    def _add(v: Any) -> None:
+        if isinstance(v, (list, tuple)) and len(v) == 2:
+            try:
+                out.append((int(v[0]), int(v[1])))
+            except (TypeError, ValueError):
+                pass
+
+    for opt in selected_options or []:
+        p = getattr(opt, "payload", None) or {}
+        _add(p.get("drop_at"))
+        _add(p.get("at"))
+        for c in (p.get("cells") or p.get("comb_path") or []):
+            _add(c)
+        for w in (p.get("waves") or []):
+            if isinstance(w, Mapping):
+                _add(w.get("drop_at"))
+                for c in (w.get("comb_path") or []):
+                    _add(c)
+    return out
+
+
+def _emp_is_relevant(emp_opt: Any, selected_options: Sequence[Any]) -> bool:
+    """Would this salvo deny a rival anything near where WE are working?
+
+    A salvo costs one of 21 hours. Blinding a probe far from our own ground
+    buys vision denial we cannot exploit, so require at least one missile
+    centre within :data:`_EMP_RELEVANCE_R` of a cell tonight's plan touches.
+    With no harvester plan yet (probe-only night) the salvo is allowed — the
+    hour is not competing with a chain.
+    """
+    targets = (getattr(emp_opt, "payload", None) or {}).get("targets") or []
+    mine = _plan_cells(selected_options)
+    if not mine:
+        return True
+    for t in targets:
+        if not (isinstance(t, (list, tuple)) and len(t) == 2):
+            continue
+        try:
+            tx, ty = int(t[0]), int(t[1])
+        except (TypeError, ValueError):
+            continue
+        for (mx, my) in mine:
+            if max(abs(tx - mx), abs(ty - my)) <= _EMP_RELEVANCE_R:
+                return True
+    return False
+
+
 def _thinker_plan_summary(directive: Any) -> str:
     """One-line plan_this_turn sourced from the thinker directive (A4).
 
@@ -731,6 +785,72 @@ def run(
             agency_mod.resolve_plan(thinker_directive.plan, option_registry)
             if thinker_directive else []
         )
+        # ── bxiao_tracker: WEAPON SELECTION GUARDS ────────────────────────
+        # The four rungs make a weapon offerable; they do not make it CHOSEN.
+        # That gap is measured, not assumed: with the whole path working —
+        # round bought, option on the menu on five separate nights, doctrine in
+        # the prompt — the thinker selected it ZERO times. Nothing was broken.
+        # The plumbing was complete and the decision never came.
+        #
+        # Why override the model at all: a harvest chain banks points and a
+        # denial does not, so an option that spends an hour to stop the RIVAL
+        # scoring loses a slot-by-slot comparison every time it is judged on its
+        # own yield. The reason to fire is in the SEASON record, not the night —
+        # the rich squares are won by denying the other seat's landing, which a
+        # single night's arithmetic cannot see.
+        n_harvesters = len(probe_hints_mod._orbit_harvester_ids(agent_view))
+
+        # EMP: a salvo costs one of 21 shared hours, so it must buy denial that
+        # matters TO US. Requires the option on the menu, 2+ harvesters so the
+        # hour never cuts our only chain, a missile centre within
+        # _EMP_RELEVANCE_R of ground we are actually working, and that the
+        # thinker did not already pick it. Evidence for the relevance clause:
+        # one seed fired four salvos at far-off probes and lost by 76%, while
+        # both wins fired 1-2 at relevant ones.
+        emp_guard_fired = ""
+        if "EMP_SCORCH" not in option_registry:
+            emp_guard_fired = "no-option"
+        elif n_harvesters < 2:
+            emp_guard_fired = f"only-{n_harvesters}-harvester"
+        elif any(getattr(o, "option_id", "") == "EMP_SCORCH"
+                 for o in selected_options):
+            emp_guard_fired = "already-picked"
+        elif not _emp_is_relevant(
+            option_registry["EMP_SCORCH"], selected_options,
+        ):
+            emp_guard_fired = "not-near-our-ground"
+        else:
+            selected_options.insert(0, option_registry["EMP_SCORCH"])
+            emp_guard_fired = "FIRED"
+
+        # SNAP: tighter, because a round is one named square rather than a
+        # 3-disk salvo. No relevance test — the option only EXISTS when a rival
+        # beacon overlooks rich ground, so relevance is a precondition of the
+        # offer rather than a filter on it.
+        #
+        # Always record WHY, not merely when it fires. The first version of this
+        # guard looked correct and did nothing across two full seasons, and the
+        # cards could not say which clause refused. Worse, I once read my own
+        # doctrine string echoed in a card as evidence the option had been
+        # offered — a skip REASON is the only thing that distinguishes those.
+        snap_guard_fired = ""
+        if "SNAP_DENY" not in option_registry:
+            snap_guard_fired = (
+                f"no-option:{getattr(agency_mod, 'LAST_SNAP_SKIP', '') or '?'}"
+            )
+        elif n_harvesters < 2:
+            snap_guard_fired = f"only-{n_harvesters}-harvester"
+        elif any(getattr(o, "option_id", "") == "SNAP_DENY"
+                 for o in selected_options):
+            snap_guard_fired = "already-picked"
+        else:
+            snap_opt = option_registry["SNAP_DENY"]
+            selected_options.insert(0, snap_opt)
+            _pay = getattr(snap_opt, "payload", None) or {}
+            snap_guard_fired = (
+                f"FIRED:{_pay.get('denies_tier') or 'rich'}"
+                f"@{_pay.get('denies')}"
+            )
         # R5: on the final night, a plan of only probes/supersedes banks zero
         # (they pay a tomorrow that never comes). If a harvester is alive but the
         # resolved plan deploys none, force in the best deploy option.

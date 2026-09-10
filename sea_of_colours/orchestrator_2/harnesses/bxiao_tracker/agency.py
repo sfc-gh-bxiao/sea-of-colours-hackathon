@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any, Collection, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker import chain_filter
+from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker import scorch
 from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker import comb_shapes
 from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker import option_economics
 from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker import packager
@@ -45,6 +46,7 @@ from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker._v7.probe_hints impor
     _grid_dims,
     _vision_disk,
     _visible_red,
+    _enemy_probe_cells,
 )
 
 # Comb-shape variants offered per hot drop (the user's "length/area is the
@@ -713,6 +715,340 @@ def _chains_off_the_seam(
     return kept, suppressed
 
 
+_EMP_RICH_TIERS = ("pure", "mass")
+#: How near a rival probe a rich cell must be to count as "they are looking at
+#: it". Their probe marks intent; the rich cell marks where the cargo is.
+_EMP_INTENT_R = 8
+
+
+def _emp_denial_targets(
+    agent_view: Mapping[str, Any],
+    *,
+    missiles: int,
+) -> Tuple[List[List[int]], str]:
+    """Aim points that deny RICH GROUND rather than chase rival probes.
+
+    Returns ``(targets, basis)`` where basis names the reasoning used.
+
+    bxiao_tracker rationale. Targeting rival probes was correct by its own logic
+    and nearly useless in effect: measured over three seasons the EMP landed one
+    clean hit, caught our OWN harvester once, and on seed 707 hit empty ground
+    for zero effect. A probe sits wherever it was launched; it does not tell us
+    where the enemy CARGO will be.
+
+    Rich ground does. Both seats must walk to the pure and the mass, so a cloud
+    parked on rich ground:
+
+      * denies that cell for the whole 8-hour cloud — a pure is 765 red the
+        rival cannot bank, bought without spending a harvester of ours;
+      * is far likelier to catch a LOADED rival harvester than a probe cell is,
+        and a disabled loaded unit risks a dawn crash that spills everything.
+
+    Cells our own force-surfaced grabs are taking are excluded here, and the
+    packager's friendly-fire filter cuts anything our final route touches, so
+    the denial can never be self-inflicted.
+    """
+    from . import value_pyramid
+
+    enemy = _enemy_probe_cells(agent_view)
+    enemy_cells = [
+        (int(r["at"][0]), int(r["at"][1]))
+        for r in enemy
+        if isinstance(r.get("at"), (list, tuple)) and len(r["at"]) == 2
+    ]
+
+    # Ground we are already taking ourselves — never aim there.
+    ours: set = set()
+    try:
+        for spec in value_pyramid.force_surface_grabs(agent_view) or []:
+            ours.add(tuple(spec.target))
+            for c in spec.cells or []:
+                ours.add(tuple(c))
+    except Exception:
+        pass
+
+    try:
+        cands = value_pyramid.build_candidates(agent_view) or []
+    except Exception:
+        cands = []
+
+    def _intent_distance(cell: Tuple[int, int]) -> int:
+        if not enemy_cells:
+            return _EMP_INTENT_R + 1
+        return min(max(abs(cell[0] - e[0]), abs(cell[1] - e[1]))
+                   for e in enemy_cells)
+
+    rich = []
+    for c in cands:
+        if c.colour != "RED" or c.tier not in _EMP_RICH_TIERS:
+            continue
+        cell = (int(c.cell[0]), int(c.cell[1]))
+        if cell in ours:
+            continue
+        rich.append((cell, int(c.purity), _intent_distance(cell)))
+
+    if rich:
+        # Contested first: a rich cell a rival probe is watching is a cell their
+        # harvester is heading for. Then richest. Then stable by coordinate.
+        rich.sort(key=lambda r: (0 if r[2] <= _EMP_INTENT_R else 1,
+                                 -r[1], r[0][1], r[0][0]))
+        targets = [[c[0], c[1]] for c, _p, _d in rich[:missiles]]
+        contested = sum(1 for _c, _p, d in rich[:missiles]
+                        if d <= _EMP_INTENT_R)
+        basis = (
+            f"rich ground denial ({len(targets)} cell(s), {contested} of them "
+            f"under a rival probe's eye)"
+        )
+        return targets, basis
+
+    # Fallback: no rich ground on offer, so deny vision instead.
+    targets = [[c[0], c[1]] for c in enemy_cells[:missiles]]
+    return targets, "rival probe vision denial (no rich ground visible)"
+
+
+def _emp_scorch_options(
+    agent_view: Mapping[str, Any],
+) -> List[Option]:
+    """Build EMP_SCORCH options that DENY RICH GROUND to the rival.
+
+    Returns an empty list when the seat has no EMP charges, or when there is
+    neither rich ground nor a known rival probe to aim at.
+    """
+    ws = scorch.stock(agent_view)
+    if ws.get("emp", 0) <= 0:
+        return []
+    sp = scorch.specs(agent_view)
+    missiles = sp.get("missiles", 3)
+    radius = sp.get("radius", 2)
+    cloud_hours = sp.get("cloud_hours", 8)
+
+    targets, basis = _emp_denial_targets(agent_view, missiles=missiles)
+    if not targets:
+        return []
+    # Pad to exactly `missiles` centres by repeating the first target
+    # (the engine fires all missiles regardless).
+    while len(targets) < missiles:
+        targets.append(list(targets[0]))
+
+    target_str = " ".join(f"({t[0]},{t[1]})" for t in targets)
+
+    detail = (
+        f"scorch {target_str} -- {basis}; the cloud sits for {cloud_hours}h so "
+        f"nobody banks those cells tonight; costs 1 hour (H1)"
+    )
+    rationale = (
+        f"BLUE was spent in orbit (sunk cost). Firing costs 1 action slot. "
+        f"Aim is RICH GROUND, not probes: a cloud on a pure denies 765 red the "
+        f"rival cannot bank, and their loaded harvester has to walk there to "
+        f"take it — a disabled loaded unit risks a dawn crash that spills the "
+        f"whole haul. Best at H1, before they land. Any missile that would "
+        f"catch OUR route is cut automatically."
+    )
+
+    return [Option(
+        option_id="EMP_SCORCH",
+        kind="weapon",
+        title=f"EMP salvo — {basis} at {target_str}",
+        detail=detail,
+        execute_lines=[
+            f"emp_launch at {target_str}  # {missiles} missiles, radius {radius}, cloud {cloud_hours}h",
+        ],
+        payload={
+            "weapon": "emp",
+            "targets": targets,
+            "missiles": missiles,
+            "radius": radius,
+            "cloud_hours": cloud_hours,
+        },
+        rationale=rationale,
+    )]
+
+
+#: Tiers worth spending a SNAP round to deny. Deliberately NARROWER than
+#: the EMP's list is wide: an EMP salvo blankets 3 disks of ~13 cells and can
+#: afford to be approximate, while a SNAP is a single square named an hour in
+#: advance. ``turnlab/README.md`` puts it exactly right -- "a fork that fires
+#: it at the middle of the map has told you as much as one that does not fire
+#: it at all" -- so the bar for taking the shot is a genuinely rich square.
+_SNAP_RICH_TIERS = ("pure", "mass")
+
+#: Score multipliers by tier — the engine's own RED_QUALITY_MULTIPLIER
+#: (``game/session.py`` compute_player_score). A parcel is worth
+#: ``effective_purity * multiplier``, so pure 765 / mass ~300 / vein ~90 /
+#: trace ~19. Restated here rather than imported because agency must stay
+#: importable on a stripped test view.
+_SNAP_TIER_MULT = {"trace": 0.75, "vein": 1.0, "mass": 1.5, "pure": 3.0}
+
+#: A harvester banks at most HARVESTER_HOLD_CAPACITY parcels per outing, so the
+#: value a beacon can actually deliver to the rival TONIGHT is capped at six
+#: cells. Summing its whole disk would overstate a broad shallow field.
+_SNAP_DENIAL_CELLS = 6
+
+#: The bar a denial must clear to be worth a round. Set at roughly two vein
+#: parcels: below that the shot is the "fires it at the middle of the map" case
+#: ``turnlab/README.md`` warns about, and the hour is better spent harvesting.
+#:
+#: This replaced a pure/mass-only gate that MEASURED as almost never firing:
+#: across five nights on seed 2222 the option refused four times with
+#: "no-pure-or-mass-visible", which matches the season record — only ~10% of our
+#: parcels are pure or mass, so a gate on those two tiers is a gate on nothing.
+#: Value-summing keeps the aim honest (a rich beacon still wins) without making
+#: the weapon unreachable on an ordinary board.
+_SNAP_MIN_DENIAL = 200
+
+
+def _snap_cell_value(purity: int, tier: str) -> float:
+    """What one RED parcel of this purity is worth at settlement."""
+    return float(purity) * _SNAP_TIER_MULT.get(str(tier), 0.75)
+
+
+#: Why the last SNAP_DENY build refused, for the card tag. Diagnostic ONLY --
+#: nothing reads it to make a decision. It exists because the first version of
+#: this option shipped silently returning [] and the cards could not say which
+#: precondition was missing, which cost two full seasons to notice.
+LAST_SNAP_SKIP: str = ""
+
+
+def _snap_deny_options(
+    agent_view: Mapping[str, Any],
+) -> List[Option]:
+    """Build SNAP_DENY: kill the rival BEACON that is lighting rich ground.
+
+    bxiao_tracker, and the reasoning matters because SNAP is not a small EMP.
+
+    A drop needs LIVE sensor coverage (RULEBOOK 3.9.7). SNAP resolves ABOVE
+    the hour-start vision snapshot (4.9.4) while an EMP resolves BELOW it, and
+    that single ordering difference is the whole weapon: a beacon an EMP kills
+    was already written down as lit, so the rival's landing STANDS. A beacon a
+    SNAP kills was never recorded, so the landing that square was lighting is
+    refused TONIGHT. The rulebook names this "the answer to smash-and-grab".
+
+    So we aim at the rival PROBE whose vision disk covers the richest RED
+    ground, not at the ore itself. Killing the eye denies the whole outing;
+    scorching the ore denies one square for one hour.
+
+    Why this is the right shot for THIS agent, from measured evidence rather
+    than taste: our deficit against V12 is pure and mass capture -- 12 pure
+    parcels to their 25, 73 mass to their 105, with vein a dead heat. Every
+    board holds exactly TWO pure cells, so the high-value squares are
+    inherently contested, and on seed 1717 day 6 we lost 300 points and three
+    hold slots walking into ground V12 had already stripped. Denying their
+    landing on a contested pure is the same lever, applied a night earlier.
+
+    Returns an empty list when the seat holds no SNAP, or when no rival beacon
+    is looking at anything worth a round.
+    """
+    global LAST_SNAP_SKIP
+    LAST_SNAP_SKIP = ""
+    if not scorch.has_snap(agent_view):
+        LAST_SNAP_SKIP = "no-round"
+        return []
+
+    enemy = _enemy_probe_cells(agent_view)
+    if not enemy:
+        LAST_SNAP_SKIP = "no-enemy-beacon"
+        return []
+
+    width, height = _grid_dims(agent_view)
+
+    # Ground we are taking ourselves. A SNAP on it would cripple our OWN
+    # walk-in or turn back our OWN landing -- friendly fire is on (4.9.4).
+    ours: set = set()
+    try:
+        for spec in value_pyramid.force_surface_grabs(agent_view) or []:
+            ours.add(tuple(spec.target))
+            for c in spec.cells or []:
+                ours.add(tuple(c))
+    except Exception:
+        pass
+
+    try:
+        cands = value_pyramid.build_candidates(agent_view) or []
+    except Exception:
+        cands = []
+    rich = [
+        ((int(c.cell[0]), int(c.cell[1])), int(c.purity), str(c.tier))
+        for c in cands
+        if c.colour == "RED"
+        and (int(c.cell[0]), int(c.cell[1])) not in ours
+    ]
+    if not rich:
+        LAST_SNAP_SKIP = "no-red-visible"
+        return []
+
+    # Score each rival beacon by the value its disk could actually deliver to
+    # them tonight: the best SIX cells it lights, since that is one hold.
+    # Ranked by that total, then freshness of the sighting -- an echo from four
+    # nights ago may be a probe that is no longer there, and a round spent on
+    # empty ground is a round not spent on a live beacon.
+    ranked: List[Tuple[float, int, Tuple[int, int], Tuple[int, int], str, int]] = []
+    for row in enemy:
+        at = row.get("at")
+        if not (isinstance(at, (list, tuple)) and len(at) == 2):
+            continue
+        px, py = int(at[0]), int(at[1])
+        if (px, py) in ours:
+            continue
+        disk = set(_vision_disk(px, py, width, height))
+        lit = [
+            (_snap_cell_value(p, tier), cell, p, tier)
+            for cell, p, tier in rich if cell in disk
+        ]
+        if not lit:
+            continue
+        lit.sort(key=lambda r: (-r[0], r[1][1], r[1][0]))
+        total = sum(v for v, _c, _p, _t in lit[:_SNAP_DENIAL_CELLS])
+        if total < _SNAP_MIN_DENIAL:
+            continue
+        _bv, bcell, bpurity, btier = lit[0]
+        ranked.append((total, int(row.get("day_seen") or 0),
+                       (px, py), bcell, btier, bpurity))
+    if not ranked:
+        LAST_SNAP_SKIP = "no-beacon-worth-a-round"
+        return []
+    # Richest denial first, then freshest, then stable by coordinate.
+    ranked.sort(key=lambda r: (-r[0], -r[1], r[2][1], r[2][0]))
+    total, _seen, (px, py), (rx, ry), tier, purity = ranked[0]
+
+    detail = (
+        f"snap the rival beacon at ({px},{py}) -- its vision disk is lighting "
+        f"~{int(total)} points of RED they could bank tonight, best cell "
+        f"{tier} purity-{purity} at ({rx},{ry}). SNAP resolves BEFORE "
+        f"the hour's vision snapshot, so the beacon is gone before coverage is "
+        f"recorded and their drop onto that ore is refused TONIGHT, not "
+        f"tomorrow. Costs 1 hour (H1). One cell only."
+    )
+    rationale = (
+        f"An EMP on the same beacon would NOT do this: it resolves below the "
+        f"snapshot, so the beacon counts as lit and their landing stands "
+        f"(RULEBOOK 4.9.4, OUTSTANDING_ISSUES #24). This is the cheapest round "
+        f"in the game at 100 blue -- half an EMP -- and our measured weakness "
+        f"is exactly this: we take 12 pure parcels to their 25 on boards that "
+        f"hold only two pure cells each. Denying the landing beats racing for "
+        f"it. Any round that would catch our own fleet or beacon is cut "
+        f"automatically."
+    )
+
+    return [Option(
+        option_id="SNAP_DENY",
+        kind="weapon",
+        title=f"SNAP beacon ({px},{py}) — denies ~{int(total)} pts of their haul ({tier} at {rx},{ry})",
+        detail=detail,
+        execute_lines=[
+            f"snap_launch at ({px},{py})  # one cell, resolves above the vision snapshot",
+        ],
+        payload={
+            "weapon": "snap",
+            "target": [px, py],
+            "denies": [rx, ry],
+            "denies_purity": purity,
+            "denies_total": int(total),
+            "denies_tier": tier,
+        },
+        rationale=rationale,
+    )]
+
+
 def build_registry(
     *,
     agent_view: Mapping[str, Any],
@@ -846,6 +1182,18 @@ def build_registry(
         reg[opt.option_id] = opt
 
     _apply_hazard(reg, hazard_cells)
+    # ── bxiao_tracker RUNG 2b/3: put the weapon plays ON THE MENU ──────
+    # Stock V12 reaches here with a rack it has no way to offer. These two
+    # builders return [] unless the seat actually holds the round AND there is
+    # something worth aiming at, so a menu never carries a play that cannot
+    # compile. Offered after the harvest options so the cheap-effect plays read
+    # last, and independently of each other: the 600-blue cap fits one of each,
+    # and EMP (area, 3 missiles) and SNAP (one named square, resolves above the
+    # vision snapshot) answer genuinely different questions.
+    for opt in _emp_scorch_options(agent_view):
+        reg[opt.option_id] = opt
+    for opt in _snap_deny_options(agent_view):
+        reg[opt.option_id] = opt
     return reg
 
 

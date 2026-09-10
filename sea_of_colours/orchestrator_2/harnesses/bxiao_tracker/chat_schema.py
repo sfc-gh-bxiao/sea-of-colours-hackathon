@@ -20,6 +20,19 @@ from sea_of_colours.orchestrator_2.harnesses.bxiao_tracker._v7.chat_schema impor
     _DECISION_SCHEMA as _V7_DECISION_SCHEMA,
 )
 
+# bxiao_tracker RUNG 2a. The weapon verbs live in the _v7 enum, but the
+# readiness scanner reads THIS file — and more usefully, an assertion here
+# fails loudly at import time if a future upstream pull rewrites the v7
+# schema and drops them. A weapon path that silently loses its verb is the
+# failure mode that is hardest to see: nothing crashes, the agent simply
+# stops firing and the score drifts.
+assert "emp_launch" in _MOVE_ITEM["properties"]["a"]["enum"], (
+    "chat_schema.py: _MOVE_ITEM enum must include emp_launch"
+)
+assert "snap_launch" in _MOVE_ITEM["properties"]["a"]["enum"], (
+    "chat_schema.py: _MOVE_ITEM enum must include snap_launch"
+)
+
 # v11 STRATEGY JOURNAL: two extra agent-authored strings on the plan pass.
 #   * ``intent``     — 1-2 sentences: what the agent is trying to do tonight +
 #                      why. Saved to the journal and shown back next night.
