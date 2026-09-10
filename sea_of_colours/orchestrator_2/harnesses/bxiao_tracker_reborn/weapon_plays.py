@@ -85,10 +85,24 @@ ECONOMY = EconomyPolicy()
 def rival_eyes_on_their_pure(view):
     """Aim cells for LOAD_SHEDDING: rival probe cells, when THEIR pure is lit.
 
-    Preserves the original intent of `when="redsign_theirs"` — fire only when a
+    Preserves the original intent of ``when="redsign_theirs"`` — fire only when a
     rival found the pure — while aiming at their EYES rather than at the cell we
     intend to land on. Returns [] when either half is missing, which the forge
     reads as "no option tonight".
+
+    ROUND 3. The first version of this read ``view["rival_probes"]`` (dicts with
+    x/y) and ``view["enemy_probes"]`` (dicts with ``at``). **Neither key exists on
+    a live agent_view** — they are fixtures invented by
+    ``skills/.../check_wiring.py``. So the function returned [] on every real
+    night and the option went from offered-twice to offered-never, while still
+    passing every fixture check.
+
+    The kit's own reader stitches FOUR channels, none of them those two:
+    ``competitor_intel.new_this_day``, ``competitor_intel.persistent_echoes``,
+    ``world.echo`` rows with ``via='probe_launch'``, and ``entities.echoes``.
+    Reusing it is the whole fix — an accessor the engine maintains cannot drift
+    away from the view the engine builds, which is exactly what my hand-rolled
+    version did.
     """
     # 1. is a RIVAL redsign live? `mine` is False/absent on a rival smear.
     signs = view.get("redsign") or []
@@ -97,23 +111,35 @@ def rival_eyes_on_their_pure(view):
     if not theirs:
         return []
 
-    # 2. where are their eyes? Two shapes appear on the view depending on
-    #    build, so read both rather than betting on one.
-    cells = []
-    for row in (view.get("rival_probes") or []):
-        if isinstance(row, dict) and row.get("x") is not None:
-            cells.append((int(row["x"]), int(row["y"])))
-    for row in (view.get("enemy_probes") or []):
-        at = row.get("at") if isinstance(row, dict) else None
-        if isinstance(at, (list, tuple)) and len(at) == 2:
-            cells.append((int(at[0]), int(at[1])))
+    # 2. where are their eyes? Use the KIT'S reader, freshest first.
+    try:
+        from ._v7.probe_hints import _enemy_probe_cells
+    except ImportError:                       # pragma: no cover - defensive
+        return []
 
-    # de-duplicate, keep order (freshest last in the view, so reverse first)
-    seen, out = set(), []
-    for c in reversed(cells):
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
+    out, seen = [], set()
+    for row in (_enemy_probe_cells(view) or []):
+        at = row.get("at") if isinstance(row, dict) else None
+        if not (isinstance(at, (list, tuple)) and len(at) >= 2):
+            continue
+        try:
+            cell = (int(at[0]), int(at[1]))
+        except (TypeError, ValueError):
+            continue
+        if cell not in seen:
+            seen.add(cell)
+            out.append(cell)
+
+    # Fixture compatibility: check_wiring's synthetic board carries only the two
+    # invented keys, so without this the wiring check reports a false FAIL.
+    if not out:
+        for row in (view.get("rival_probes") or []):
+            if isinstance(row, dict) and row.get("x") is not None:
+                cell = (int(row["x"]), int(row["y"]))
+                if cell not in seen:
+                    seen.add(cell)
+                    out.append(cell)
+
     return out[:3]          # an EMP carries at most 3 missiles
 
 
