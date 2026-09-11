@@ -40,7 +40,7 @@ Check yourself any time with:
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import List, Tuple
 
 from .weapon_forge import EconomyPolicy, WeaponPlay
 
@@ -139,6 +139,82 @@ def rival_eyes_on_their_pure(view):
                 if cell not in seen:
                     seen.add(cell)
                     out.append(cell)
+
+    # ── ROUND 7: the smear fallback ───────────────────────────────────────
+    # WHY. Rounds 1-6 got the wiring and the argument right, and the play was
+    # still offered on only 2 of the 8 nights where we held a charge AND a rival
+    # redsign was live (R6X d03/d06, R6Z d04, R6W d02/d03/d04 all passed step 1
+    # and died here). On those nights `_enemy_probe_cells` was genuinely empty —
+    # correctly so. There was no probe to see.
+    #
+    # But requiring a VISIBLE probe was always too strict, and the card says why:
+    #
+    #   "A rival knows a cell in TWO ways: probe VISION ... OR a PUBLIC REDSIGN
+    #    — the pure was broadcast to every seat, so the seam is contested even
+    #    with NO enemy probe on it. 'No enemy vision' is a TRAP on a redsign:
+    #    everyone got the warning and is racing you to it."
+    #                          (option_economics.py:1183-1189)
+    #
+    # The denial does not depend on seeing their eyes. It depends on the ground
+    # they must stand on, and a public redsign tells us exactly where that is.
+    # "They cannot drop into cells they cannot see, so a landing under the cloud
+    # is REFUSED rather than delayed" — so darkening the smear itself refuses
+    # every seat's landing on that pure, probe or no probe.
+    #
+    # THE HONEST COST, stated here because it is a real strategic downside and
+    # not a detail: the cloud refuses OUR landing on that pure too. This fallback
+    # converts the play from "blind their eyes and take it ourselves" into pure
+    # denial of a pure worth ~+765. The rationale below says so plainly, and
+    # gates it on us not contesting that pure. It is the right trade only when
+    # they are ahead on that seam.
+    if not out:
+        # CRITICAL: build the smear from `theirs` ONLY. The kit's
+        # `_redsign_cells` flattens EVERY live sign into one dict, ours
+        # included, so using it here would happily drop a cloud on our own pure
+        # whenever both seats have one lit. `theirs` is already filtered at
+        # step 1, so we re-walk exactly the shapes that reader tolerates:
+        # region `cells` as mappings or pairs, then the region `center`.
+        smear: List[Tuple[int, int]] = []
+
+        def _put(xf, yf) -> None:
+            try:
+                cell = (int(round(float(xf))), int(round(float(yf))))
+            except (TypeError, ValueError):
+                return
+            if cell not in seen:
+                seen.add(cell)
+                smear.append(cell)
+
+        for row in theirs:
+            cells = row.get("cells")
+            if isinstance(cells, (list, tuple)) and cells:
+                for c in cells:
+                    if isinstance(c, dict):
+                        _put(c.get("x"), c.get("y"))
+                    elif isinstance(c, (list, tuple)) and len(c) >= 2:
+                        _put(c[0], c[1])
+                continue
+            if row.get("x") is not None:               # legacy flat shape
+                _put(row.get("x"), row.get("y"))
+                continue
+            centre = row.get("center") or row.get("at")
+            if isinstance(centre, (list, tuple)) and len(centre) >= 2:
+                _put(centre[0], centre[1])
+
+        smear.sort()
+        # Spread the missiles. A radius-2 diamond is 13 cells, so two centres
+        # closer than 5 apart (Manhattan) waste overlap on ground already dark.
+        # Greedy farthest-point selection keeps the three clouds disjoint and
+        # covers the most of the smear the rival has to land on.
+        for cell in smear:
+            if all(abs(cell[0] - c[0]) + abs(cell[1] - c[1]) >= 5 for c in out):
+                out.append(cell)
+                if len(out) >= 3:
+                    break
+        # A smear too small to spread over is still worth one cloud on its
+        # middle cell rather than nothing at all.
+        if not out and smear:
+            out.append(smear[len(smear) // 2])
 
     return out[:3]          # an EMP carries at most 3 missiles
 
@@ -317,7 +393,12 @@ PLAYS: Tuple[WeaponPlay, ...] = (
             "THE COST IS REAL: friendly fire is ON, so do not plan a landing or "
             "a probe inside these clouds this night; they are OUR no-go ground "
             "for 8 hours too. The hour-slot is one a harvester did not walk. "
-            "TAKE IT WHEN: their pure is fresh and their eyes are on it, and we "
+            "AND IF THE AIM CELLS SIT ON THE SMEAR ITSELF, this DENIES THAT "
+            "PURE TO EVERYONE INCLUDING US — nobody lands on it tonight. That "
+            "is the right trade only when they are ahead on that seam, or when "
+            "we cannot reach it in time anyway. If we CAN reach it, prefer "
+            "BLIND_GRAB or a SMASH and keep the ~+765 live for us. "
+            "TAKE IT WHEN: their pure is fresh, and we "
             "already have a red grab banked elsewhere in the plan — this is the "
             "move that stops them out-scoring us, not the move that scores."
         ),
