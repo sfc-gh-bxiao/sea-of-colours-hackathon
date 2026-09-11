@@ -254,5 +254,72 @@ PLAYS: Tuple[WeaponPlay, ...] = (
             "light, and eight hours of dark over the ground our own probe is "
             "watching means they cannot work it while we still can"
         ),
+        # ── ROUND 6: PERSUASION ───────────────────────────────────────────
+        # Rounds 1-5 fixed the wiring. It works: offered on 4 / 2 / 4 nights of
+        # 7 across three seasons, correct aim, correct one-move salvo. And the
+        # model took it ZERO times. So the remaining problem is the argument,
+        # not the plumbing.
+        #
+        # GROUND TRUTH from the live card (REBORN_R5X d03_p1_planning.md:55-58),
+        # which is what the model actually reads:
+        #
+        #   [LOAD_SHEDDING] ... Costs 200 blue and one hour-slot.  - no probe
+        #        WHY: WHY: a rival has just found a pure ...
+        #        yield: red ~+0 - blue 0 - green 0
+        #        crush: none - collision risk: LOW (no cell you touch is under
+        #                                           enemy vision)
+        #
+        # Two corrections to my earlier reading:
+        #  * collision risk is **LOW**, not HIGH. The HIGH / "~7% chance this
+        #    comb CROSSES the pure" text I blamed belongs to GRAB1's annotation
+        #    further down the same card. Geometry was never the objection.
+        #  * The objection is the line above it: **yield: red ~+0**. Directly
+        #    beneath sits `[GRAB1] ... yield: red ~+292`, under doctrine that
+        #    says take the red first. A rational reader picks +292 over +0 every
+        #    single night, and it did.
+        #
+        # An empty `rationale` is composed as
+        #     f"WHY: {p.why...}" + _MECHANICS + cost + COMPARE + THE COST IS REAL
+        # which ALSO produces the duplicated "WHY: WHY:" visible above (a real
+        # forge defect). Overriding `rationale` replaces the whole string, so
+        # this both fixes that and lets the denial be priced in the model's own
+        # currency.
+        #
+        # Everything asserted below is taken from the same card, not invented:
+        # the card itself says "a pure is worth ~+765, so the swing is ~1530",
+        # and the mechanics line is the forge's own `_MECHANICS["emp"]`. The
+        # cost stays stated in full — the skill is explicit that an option which
+        # hides its cost is worse than no option.
+        rationale=(
+            "READ THE YIELD LINE CORRECTLY: this option banks +0 red BY DESIGN. "
+            "It is not a harvest and it does not compete with GRAB on points "
+            "tonight. Its return is measured on the RIVAL's column, not ours. "
+            "THE TRADE: a rival has just lit a pure and will commit to it at "
+            "first light. This card prices a pure at ~+765, and says the swing "
+            "on one is ~1530. One launch puts up to 3 radius-2 clouds over the "
+            "exact cells their eyes are sitting on, for 8 hours from hour 1 — "
+            "probes inside die, and they cannot drop into cells they cannot "
+            "see, so the landing is REFUSED rather than delayed. They do not "
+            "get a slower run at that pure; they get no run at it, and our own "
+            "probe keeps watching ground they can no longer work. "
+            "WHY IT IS CHEAP TONIGHT: collision risk on this play is LOW — no "
+            "cell we touch is under enemy vision — and it needs NO probe, so it "
+            "does not compete with the probe budget that gates the grabs. It "
+            "costs 200 blue and one hour-slot. "
+            "COMPARE: GRAB* banks certain red tonight and leaves their night "
+            "completely untouched — take one of those FIRST, it is not either/or. "
+            "BLIND_GRAB is the closer rival: it spends a probe to blind the "
+            "finder and banks points itself, but it removes ONE eye for ONE "
+            "hour and they can still act from another, whereas this refuses "
+            "every landing under each cloud it puts up, for eight hours. "
+            "Pick BLIND_GRAB if you "
+            "want the halo; pick this if their pure is the thing beating us. "
+            "THE COST IS REAL: friendly fire is ON, so do not plan a landing or "
+            "a probe inside these clouds this night; they are OUR no-go ground "
+            "for 8 hours too. The hour-slot is one a harvester did not walk. "
+            "TAKE IT WHEN: their pure is fresh and their eyes are on it, and we "
+            "already have a red grab banked elsewhere in the plan — this is the "
+            "move that stops them out-scoring us, not the move that scores."
+        ),
     ),
 )
