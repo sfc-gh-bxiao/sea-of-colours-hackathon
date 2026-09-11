@@ -211,15 +211,44 @@ PLAYS: Tuple[WeaponPlay, ...] = (
     # the self-harm and answers the more interesting question directly: is the
     # denial worth one of 21 shared hours on its own, with no points banked
     # behind it?
+    # ROUND 5 — MEASURED, not guessed. For a `when="other"` + trigger play, the
+    # builder takes this branch (weapon_forge.py:524):
+    #
+    #     if p.when == "other" and p.trigger is not None:
+    #         aim = list(p.trigger(agent_view) or ())
+    #     else:
+    #         aim, comb, _notes = _aim_points(...)
+    #         if p.probe_the_comb and comb: ...
+    #
+    # `_aim_points` is NEVER called, so `comb` is ALWAYS empty. Therefore:
+    #   * probe_the_comb  — INERT. Proven: the rationale is byte-identical with
+    #                       it True or False, and no probe/drop line is ever
+    #                       emitted. Left False now so the file stops implying
+    #                       a follow-up that cannot exist.
+    #   * min_targets     — INERT. It is only read inside `_aim_points` under
+    #                       targets="rival_probes", which additionally needs
+    #                       scorch.py (absent). Dropped.
+    #   * combines_with   — PROSE ONLY. It changes exactly one clause of the
+    #                       rationale: "COMPARE: GRAB1 a visible pure/mass grab
+    #                       banks the most certain points" (standalone) versus
+    #                       "COMPARE: PR1 a bare probe buys vision and banks
+    #                       nothing tonight" (probe). 851 chars vs 833. Nothing
+    #                       else differs, and it does not depend on whether a
+    #                       seam pattern is present.
+    #
+    # CONSEQUENCE: round 4's change was an 18-character prose edit. It CANNOT
+    # explain the drop from 6 offers to 0. That swing was board divergence
+    # between two LLM seasons — noise at n=2, not the edit. The gating and the
+    # aim of this play live ENTIRELY in `rival_eyes_on_their_pure` above; every
+    # other field here is decoration.
     WeaponPlay(
         play_id="LOAD_SHEDDING",
         weapon="emp",
         when="other",                       # gated by the trigger below
         hour="super_early",
-        combines_with="standalone",
-        trigger=rival_eyes_on_their_pure,   # gates AND aims — see above
-        probe_the_comb=True,
-        min_targets=2,
+        combines_with="standalone",         # prose only — see above
+        trigger=rival_eyes_on_their_pure,   # gates AND aims — the only real lever
+        probe_the_comb=False,               # inert on this branch; was True
         why=(
             "a rival has just found a pure so they will commit to it at first "
             "light, and eight hours of dark over the ground our own probe is "
