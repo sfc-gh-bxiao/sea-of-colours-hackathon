@@ -425,13 +425,91 @@ def _chain_option(idx: int, h: Mapping[str, Any], *, id_suffix: str = "") -> Opt
 _CHAIN_SHORT_STEPS = 2
 
 
-def _chain_shape_options(idx: int, h: Mapping[str, Any]) -> List[Option]:
-    """Full chain plus, for a LONG chain, a SHORT 'rich head' variant.
+def _short_variant_reason(h: Mapping[str, Any],
+                          agent_view: Mapping[str, Any]) -> str:
+    """The doctrine's "real reason" to offer a SHORT chain, or "" for none.
 
-    The greedy chain is purity-descending, so its first cells are the richest;
-    a SHORT variant (drop + 2 steps) lets the thinker trade tail length for lower
-    exposure / hold use. The two share the same drop cell, so the packager's
-    duplicate-drop guard means only one ever executes even if both are selected.
+    ROUND 10. `_chain_shape_options` used to emit a SHORT variant for EVERY chain
+    longer than three cells, unconditionally. The doctrine printed in the same
+    prompt says the opposite:
+
+        "Go SHORT only for a real reason (see below) — and a CONTESTED JACKPOT
+         is the biggest one."
+
+    So the menu was contradicting the doctrine on every quiet board, and the
+    agent took the bait. Measured over 12 seasons on 6 seeds against both
+    opponents, with near-identical total picks (25.0 vs 24.0):
+
+        offered short-share   TOP-6 43.3%  BOTTOM-6 38.8%   <- flat/inverted
+        CHOSEN  short-share   TOP-6 47.1%  BOTTOM-6 71.4%   <- 24-point gap
+
+    Same menus, and our worst seasons chose SHORT 71% of the time against 47% in
+    our best; mean score 2376 vs 3528. One season chose 9 SHORT and 0 full. Since
+    `compute_player_score` credits shipped RED only, a chain cut short banks
+    fewer red cells and pays for it directly.
+
+    Round 8 established that PROSE IS NOT A CONSTRAINT — arguing against the
+    option in its own detail text does not stop the model taking it. So this
+    gates GENERATION instead: no reason, no option on the menu.
+
+    The three reasons are the ones the doctrine itself names, read off the board
+    with the kit's own accessors rather than invented here:
+
+      * ARMED RIVAL   — a chaff or EMP can jam the pickup, so lifting early with
+                        the rich head is genuinely safer than riding the tail.
+      * ENEMY VISION  — a cell on the walk sits under a live enemy probe disk;
+                        the tail is exposed to a targeted response.
+      * CONTESTED     — a cell on the walk lies in the PUBLIC redsign footprint:
+                        the jackpot case the doctrine calls the biggest one.
+    """
+    cells = [(int(c[0]), int(c[1]))
+             for c in (h.get("cells") or [])
+             if isinstance(c, (list, tuple)) and len(c) == 2]
+    if not cells:
+        return ""
+
+    # CONTESTED first — the doctrine ranks it the strongest reason.
+    try:
+        public = option_economics._redsign_public_cells(agent_view)
+    except Exception:                              # noqa: BLE001 - defensive
+        public = set()
+    if any(c in public for c in cells):
+        return "contested jackpot on the walk"
+
+    try:
+        watched = option_economics._enemy_vision(agent_view)
+    except Exception:                              # noqa: BLE001 - defensive
+        watched = set()
+    if any(c in watched for c in cells):
+        return "a walked cell is under a live enemy probe disk"
+
+    # ARMED RIVAL — read the public weaponised-blue totals off the view. A seat
+    # holding ordnance can jam the pickup, which is what "lift early" buys.
+    est = agent_view.get("weapon_estimates") or agent_view.get("rivals") or {}
+    if isinstance(est, Mapping):
+        for e in est.values():
+            if not isinstance(e, Mapping):
+                continue
+            if int(e.get("weaponised_blue") or e.get("blue_weaponised") or 0) > 0:
+                return "a rival is armed and can jam the pickup"
+            if int(e.get("emps_max") or 0) > 0 or int(e.get("chaff_max") or 0) > 0:
+                return "a rival is armed and can jam the pickup"
+    return ""
+
+
+def _chain_shape_options(idx: int, h: Mapping[str, Any],
+                         agent_view: Optional[Mapping[str, Any]] = None,
+                         ) -> List[Option]:
+    """Full chain plus, ONLY WHEN THERE IS A REAL REASON, a SHORT 'rich head'.
+
+    The greedy chain is purity-descending, so its first cells are the richest; a
+    SHORT variant (drop + 2 steps) trades tail length for lower exposure / hold
+    use. That trade is worth OFFERING only when the board supplies a reason —
+    see :func:`_short_variant_reason`. On a quiet board the tail is free red and
+    the SHORT variant is a trap, which is what it measured as.
+
+    The two share the same drop cell, so the packager's duplicate-drop guard
+    means only one ever executes even if both are selected.
     """
     full = _chain_option(idx, h)
     opts = [full]
@@ -440,14 +518,22 @@ def _chain_shape_options(idx: int, h: Mapping[str, Any]) -> List[Option]:
         if isinstance(c, (list, tuple)) and len(c) == 2
     ]
     keep = _CHAIN_SHORT_STEPS + 1  # drop + 2 steps
-    if len(cells) > keep:
-        sh = dict(h)
-        sh["cells"] = cells[:keep]
-        sh["length"] = keep
-        sh["purities"] = list(h.get("purities") or [])[:keep]
-        sh["tiers"] = list(h.get("tiers") or [])[:keep]
-        sh["group"] = f"CH{idx}"
-        opts.append(_chain_option(idx, sh, id_suffix="S"))
+    if len(cells) <= keep:
+        return opts
+    reason = _short_variant_reason(h, agent_view or {})
+    if not reason:
+        return opts
+    sh = dict(h)
+    sh["cells"] = cells[:keep]
+    sh["length"] = keep
+    sh["purities"] = list(h.get("purities") or [])[:keep]
+    sh["tiers"] = list(h.get("tiers") or [])[:keep]
+    sh["group"] = f"CH{idx}"
+    short = _chain_option(idx, sh, id_suffix="S")
+    # Say WHY it is on the menu. The model is choosing between shapes, and a
+    # SHORT with no stated reason reads as free safety.
+    short.detail = f"{short.detail} — offered because {reason}"
+    opts.append(short)
     return opts
 
 
@@ -782,7 +868,7 @@ def build_registry(
     )
     for i, h in enumerate(kept_chains, start=1):
         if isinstance(h, Mapping):
-            for opt in _chain_shape_options(i, h):
+            for opt in _chain_shape_options(i, h, agent_view):
                 reg[opt.option_id] = opt
 
     for i, h in enumerate(supersede_hints or [], start=1):
@@ -840,7 +926,7 @@ def build_registry(
                 seam_suppressed, key=chain_filter._chain_ev, reverse=True,
             )[:shortfall]
             for i, h in enumerate(restored, start=len(kept_chains) + 1):
-                for opt in _chain_shape_options(i, h):
+                for opt in _chain_shape_options(i, h, agent_view):
                     reg[opt.option_id] = opt
 
     # SNAP COVER last, so it can name every landing option already registered
