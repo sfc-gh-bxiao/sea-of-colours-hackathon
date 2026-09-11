@@ -57,7 +57,50 @@ from .weapon_forge import EconomyPolicy, WeaponPlay
 # Change something only if you mean it. `hold_at={"chaff": 1}` caps the rack at
 # one; `seek_blue_when_rack_empty=False` reverts to the baseline's behaviour of
 # only topping up when the VAULT is short.
-ECONOMY = EconomyPolicy()
+# ── ROUND 9: STOP BUYING BLUE WE NEVER SPEND ──────────────────────────────
+# Eight rounds of weapon tuning produced a safe weapon and no measurable score
+# gain. This round targets a cost that is paid in EVERY season instead of one
+# that is paid once in six.
+#
+# MEASURED, from our seat's orbit cards in R8T22:
+#     d02  blue 433      d03  blue 635      d04  blue 435
+# We accumulated 635 blue, spent 200 on one EMP, and carried ~435 to the end.
+# BLUE DOES NOT SCORE — `session.py:368 compute_player_score` credits shipped
+# RED only. So that surplus is harvest capacity converted into a currency that
+# never reaches the scoreboard, to fund a charge that has fired 3 times in 27
+# seasons.
+#
+# THE DIAL. `agency._strong_chain_count` (agency.py:596-622) counts juice chains
+# banking at least `value_pyramid._STRONG_CHAIN_RED_MIN` red, and its docstring
+# states the gate: "blue is only surfaced when the seat has more harvesters than
+# strong red chains (a spare unit) or orbital asks for blue."
+#
+# So LOWERING the threshold makes MORE chains count as strong, which makes
+# `harvesters > strong_chains` false more often, which surfaces blue LESS. 60 is
+# chosen off the tier table: a vein cell is ~90 and a mass ~300, so at 60 any
+# chain that reaches real red outranks a blue run, while a pure trace-scrape
+# (~15/cell) still does not.
+#
+# WHY THIS DOES NOT DISARM US: `blue_also_requested` (weapon_forge.py:1229)
+# force-surfaces blue whenever we hold NONE of any declared weapon, and that is
+# the "or orbital asks for blue" branch above. The EMP still gets funded — just
+# later, and without the 435-blue tail. Arming later is close to free for a
+# weapon that fires once in six seasons.
+#
+# THE RISK, stated honestly: if blue dries up entirely the EMP never arms and
+# rounds 1-8 become dead weight. That is exactly what the seasons below measure.
+#
+# SECOND DIAL, found while verifying the first: `emp_stockpile_cap` was **2**, so
+# the seat would happily fund a SECOND charge at another 200 blue. Across 27
+# seasons this play has fired 3 times and never twice in one season, so the
+# second charge is 200 blue of pure carry. `hold_at={"emp": 1}` caps it.
+#
+# TWO VARIABLES CHANGED, DELIBERATELY. Normally I would move one at a time, but
+# round 5 measured ~±1,400 points of run-to-run variance, so a single-variable
+# economy test is not observable at any sample size I can afford here. Both dials
+# serve ONE intervention — stop over-funding a rack we do not empty — so they are
+# tested as one change and reported as one.
+ECONOMY = EconomyPolicy(strong_chain_red_min=60, hold_at={"emp": 1})
 
 
 # ── round-2 targeting predicate ───────────────────────────────────────────
