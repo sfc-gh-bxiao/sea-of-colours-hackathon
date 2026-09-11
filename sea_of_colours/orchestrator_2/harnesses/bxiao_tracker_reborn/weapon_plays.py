@@ -141,80 +141,78 @@ def rival_eyes_on_their_pure(view):
                     out.append(cell)
 
     # ── ROUND 7: the smear fallback ───────────────────────────────────────
-    # WHY. Rounds 1-6 got the wiring and the argument right, and the play was
-    # still offered on only 2 of the 8 nights where we held a charge AND a rival
-    # redsign was live (R6X d03/d06, R6Z d04, R6W d02/d03/d04 all passed step 1
-    # and died here). On those nights `_enemy_probe_cells` was genuinely empty —
-    # correctly so. There was no probe to see.
+    # ── ROUND 8: THE RIVAL SMEAR IS AN EXCLUSION ZONE, NOT A TARGET ───────
+    # ROUND 7 built this block to AIM at the smear whenever no enemy probe was
+    # visible, reasoning that a public redsign tells us the ground they must
+    # land on. The reasoning was sound and the conclusion was backwards.
     #
-    # But requiring a VISIBLE probe was always too strict, and the card says why:
+    # It fired for the first time in the final-polish season and self-harmed
+    # immediately (REBORN_FINAL d02):
     #
-    #   "A rival knows a cell in TWO ways: probe VISION ... OR a PUBLIC REDSIGN
-    #    — the pure was broadcast to every seat, so the seam is contested even
-    #    with NO enemy probe on it. 'No enemy vision' is a TRAP on a redsign:
-    #    everyone got the warning and is racing you to it."
-    #                          (option_economics.py:1183-1189)
+    #     BLIND_AND_GRAB  wave-1 drop   (35,22)
+    #     LOAD_SHEDDING   emp_launch    (34,21)   <- one cell diagonal
+    #     then: probe (34,21) m=0 · drop (35,22) m=2 · step (34,22) m=1
     #
-    # The denial does not depend on seeing their eyes. It depends on the ground
-    # they must stand on, and a public redsign tells us exactly where that is.
-    # "They cannot drop into cells they cannot see, so a landing under the cloud
-    # is REFUSED rather than delayed" — so darkening the smear itself refuses
-    # every seat's landing on that pure, probe or no probe.
+    # All three follow-ups sat INSIDE our own radius-2 cloud — the probe ON the
+    # blast centre, the landing refused. Identical to round 3 (R3B d05). The
+    # round-6 rationale says, in the same prompt the model read, "do not plan a
+    # landing or a probe inside these clouds this night". It did it anyway.
+    # PROSE IS NOT A CONSTRAINT.
     #
-    # THE HONEST COST, stated here because it is a real strategic downside and
-    # not a detail: the cloud refuses OUR landing on that pure too. This fallback
-    # converts the play from "blind their eyes and take it ourselves" into pure
-    # denial of a pure worth ~+765. The rationale below says so plainly, and
-    # gates it on us not contesting that pure. It is the right trade only when
-    # they are ahead on that seam.
-    if not out:
-        # CRITICAL: build the smear from `theirs` ONLY. The kit's
-        # `_redsign_cells` flattens EVERY live sign into one dict, ours
-        # included, so using it here would happily drop a cloud on our own pure
-        # whenever both seats have one lit. `theirs` is already filtered at
-        # step 1, so we re-walk exactly the shapes that reader tolerates:
-        # region `cells` as mappings or pairs, then the region `center`.
-        smear: List[Tuple[int, int]] = []
+    # THE STRUCTURAL REASON: the smear IS the prize. Every seam option the
+    # harness offers — BLIND_GRAB, BLIND_AND_GRAB, SMASH_GRAB — lands on it. So
+    # bombing the smear guarantees a collision with our own best play of the
+    # night. It was not bad luck twice; it was designed in.
+    #
+    # THE FIX: darken their EYES, never their PRIZE. That is what this play's
+    # own `why` always claimed — "eight hours of dark over the ground our own
+    # probe is watching" — and it is collision-free by construction, because
+    # their outer probes sit away from the seam core that seam options land on.
+    #
+    # So the smear is now built on EVERY path (the probe path needs the same
+    # protection: R3B's aim came from a probe, not from the fallback) and used
+    # ONLY to REJECT aim points.
+    smear: List[Tuple[int, int]] = []
+    _smear_seen: set = set()
 
-        def _put(xf, yf) -> None:
-            try:
-                cell = (int(round(float(xf))), int(round(float(yf))))
-            except (TypeError, ValueError):
-                return
-            if cell not in seen:
-                seen.add(cell)
-                smear.append(cell)
+    def _put(xf, yf) -> None:
+        try:
+            cell = (int(round(float(xf))), int(round(float(yf))))
+        except (TypeError, ValueError):
+            return
+        # NOTE: deliberately its OWN set, not the probe-dedup `seen`. Sharing
+        # `seen` would silently drop any smear cell that is ALSO a probe cell —
+        # exactly the overlap the exclusion below has to catch.
+        if cell not in _smear_seen:
+            _smear_seen.add(cell)
+            smear.append(cell)
 
-        for row in theirs:
-            cells = row.get("cells")
-            if isinstance(cells, (list, tuple)) and cells:
-                for c in cells:
-                    if isinstance(c, dict):
-                        _put(c.get("x"), c.get("y"))
-                    elif isinstance(c, (list, tuple)) and len(c) >= 2:
-                        _put(c[0], c[1])
-                continue
-            if row.get("x") is not None:               # legacy flat shape
-                _put(row.get("x"), row.get("y"))
-                continue
-            centre = row.get("center") or row.get("at")
-            if isinstance(centre, (list, tuple)) and len(centre) >= 2:
-                _put(centre[0], centre[1])
+    for row in theirs:
+        cells = row.get("cells")
+        if isinstance(cells, (list, tuple)) and cells:
+            for c in cells:
+                if isinstance(c, dict):
+                    _put(c.get("x"), c.get("y"))
+                elif isinstance(c, (list, tuple)) and len(c) >= 2:
+                    _put(c[0], c[1])
+            continue
+        if row.get("x") is not None:                   # legacy flat shape
+            _put(row.get("x"), row.get("y"))
+            continue
+        centre = row.get("center") or row.get("at")
+        if isinstance(centre, (list, tuple)) and len(centre) >= 2:
+            _put(centre[0], centre[1])
 
-        smear.sort()
-        # Spread the missiles. A radius-2 diamond is 13 cells, so two centres
-        # closer than 5 apart (Manhattan) waste overlap on ground already dark.
-        # Greedy farthest-point selection keeps the three clouds disjoint and
-        # covers the most of the smear the rival has to land on.
-        for cell in smear:
-            if all(abs(cell[0] - c[0]) + abs(cell[1] - c[1]) >= 5 for c in out):
-                out.append(cell)
-                if len(out) >= 3:
-                    break
-        # A smear too small to spread over is still worth one cloud on its
-        # middle cell rather than nothing at all.
-        if not out and smear:
-            out.append(smear[len(smear) // 2])
+    # blast radius 2 + one cell of slack, so no cloud we place can touch a
+    # smear cell that a seam option might land on.
+    _KEEP_CLEAR = 3
+    if smear:
+        # Refusing to offer is a REAL answer. A salvo that blinds them and also
+        # refuses our own landing costs 200 blue, an hour-slot, a probe AND the
+        # grab. Two of the three firings this agent has ever made did that.
+        out = [c for c in out
+               if all(abs(c[0] - s[0]) + abs(c[1] - s[1]) > _KEEP_CLEAR
+                      for s in smear)]
 
     return out[:3]          # an EMP carries at most 3 missiles
 
@@ -393,11 +391,11 @@ PLAYS: Tuple[WeaponPlay, ...] = (
             "THE COST IS REAL: friendly fire is ON, so do not plan a landing or "
             "a probe inside these clouds this night; they are OUR no-go ground "
             "for 8 hours too. The hour-slot is one a harvester did not walk. "
-            "AND IF THE AIM CELLS SIT ON THE SMEAR ITSELF, this DENIES THAT "
-            "PURE TO EVERYONE INCLUDING US — nobody lands on it tonight. That "
-            "is the right trade only when they are ahead on that seam, or when "
-            "we cannot reach it in time anyway. If we CAN reach it, prefer "
-            "BLIND_GRAB or a SMASH and keep the ~+765 live for us. "
+            "WHAT IS GUARANTEED: these aim cells are their PROBES, and every "
+            "one is at least 4 cells clear of the broadcast smear, so no cloud "
+            "here can cover the seam itself. Your GRAB, BLIND_GRAB or SMASH on "
+            "that seam stays legal tonight — this does not block your own "
+            "landing on the pure. Take the red AND take this. "
             "TAKE IT WHEN: their pure is fresh, and we "
             "already have a red grab banked elsewhere in the plan — this is the "
             "move that stops them out-scoring us, not the move that scores."
