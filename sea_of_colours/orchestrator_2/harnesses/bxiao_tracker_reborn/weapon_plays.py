@@ -194,12 +194,29 @@ PLAYS: Tuple[WeaponPlay, ...] = (
     #       correction text: "the number that matters is how many of their eyes
     #       sit inside ONE radius-2 diamond: two or more and a single charge
     #       blinds the lot."
+    # ROUND 4. combines_with: "probe" -> "standalone". ONE variable changed.
+    #
+    # Round 3 got the salvo firing in a live season (seed 22, night 5, chosen by
+    # the model with no harness guard) but the follow-up walked straight into our
+    # own cloud. An EMP at (19,13) with radius 2 darkens x 17-21, y 11-15, and
+    # EVERY follow-up order sat inside it:
+    #     probe (19,13)   <- ON the blast centre
+    #     drop  (19,12) · step (20,12) · step (21,12) · step (21,13)
+    # against the doctrine printed in the same prompt: "probes inside die,
+    # landings under it are refused ... your own units in the cloud are not
+    # immune."
+    #
+    # Round 2 fixed WHERE the salvo points; it did not stop the fleet following
+    # it in. "standalone" removes the follow-up landing entirely, which both ends
+    # the self-harm and answers the more interesting question directly: is the
+    # denial worth one of 21 shared hours on its own, with no points banked
+    # behind it?
     WeaponPlay(
         play_id="LOAD_SHEDDING",
         weapon="emp",
         when="other",                       # gated by the trigger below
         hour="super_early",
-        combines_with="probe",
+        combines_with="standalone",
         trigger=rival_eyes_on_their_pure,   # gates AND aims — see above
         probe_the_comb=True,
         min_targets=2,
