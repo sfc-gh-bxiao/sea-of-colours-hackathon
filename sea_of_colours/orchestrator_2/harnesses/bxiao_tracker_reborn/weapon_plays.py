@@ -150,8 +150,18 @@ from .weapon_forge import EconomyPolicy, WeaponPlay
 # says. The weapon is correct, safe, and has never been shown to earn its cost.
 ECONOMY = EconomyPolicy(
     strong_chain_red_min=60,                  # round 9: keep harvesters on red
-    hold_at={"emp": 0, "snap": 0},            # round 13: no ordnance at all
-    seek_blue_when_rack_empty=False,          # round 13: see the note above
+    # ROUND 14. Chaff only. It is the one weapon that costs 0 CREDITS, so it
+    # never competes with the 1500c harvester; emp and snap stay at 0 because
+    # 250 credits each is exactly what round 12 found standing between us and
+    # the second harvester. They stay DECLARED so re-arming is one number.
+    hold_at={"chaff": 1, "emp": 0, "snap": 0},
+    # ROUND 14, reversing round 13's False. Chaff needs 300 blue, so we do need
+    # to earn some. This is self-limiting rather than open-ended:
+    # `blue_also_requested` returns True only while we hold NONE of any declared
+    # weapon, so the moment the single chaff lands the request stops. Round 13
+    # had to set this False precisely because every cap was 0 and the rack could
+    # never fill, which would have chased blue forever.
+    seek_blue_when_rack_empty=True,
 )
 
 
@@ -495,5 +505,62 @@ PLAYS: Tuple[WeaponPlay, ...] = (
             "already have a red grab banked elsewhere in the plan — this is the "
             "move that stops them out-scoring us, not the move that scores."
         ),
+    ),
+    # ── ROUND 14 · EGRESS_JAM · chaff · a RIVAL's pure is lit ──────────────
+    # WHY THIS PLAY EXISTS. Round 13 stripped the rack to nothing and the two
+    # regimes came apart on one seed:
+    #     three duels      throughput UP (steps 29->46, 27->45, 25->32), our
+    #                      score UP +840 / +746 / +1089
+    #     4-seat FFA       3570 -> 620, LAST of four, 49 loss-mentions to the
+    #                      winner's 32
+    # An empty rack costs nothing measurable in a duel and looks fatal in a
+    # crowd: we cannot jam an egress or refuse a landing, so three rivals
+    # contest our ground for free. The kit says it in its own orbit comment —
+    # "chaff leads the always-build band because an empty rack loses the egress
+    # jam, and the jam is the cheapest denial in the game."
+    #
+    # WHY CHAFF SPECIFICALLY, AND NOT THE EMP BACK. Read off the engine, not
+    # guessed (game.weapons.CREDIT_COST_BY_KIND):
+    #     chaff  300 blue   0 credits
+    #     emp    200 blue   250 credits
+    #     snap   100 blue   250 credits
+    # Chaff is the ONLY ordnance that spends no credits, so it cannot compete
+    # with the 1500c harvester that round 12 identified as our throughput
+    # ceiling. It restores the crowd denial without reopening the credit squeeze
+    # round 13 set out to fix. That is the whole design.
+    #
+    # WHY IT SCALES WITH THE CROWD. `_MECHANICS["chaff"]`: "At the hour it
+    # resolves, every OTHER seat's action that hour is cancelled: drops, steps,
+    # pickups, probes, even their own launches." In a duel that cancels one
+    # rival's hour. On a 4-seat board it cancels THREE. The weapon's value is
+    # multiplied by exactly the condition that broke us in round 13.
+    #
+    # HOUR. `super_early` = H1, which is what the forge's own doctrine
+    # prescribes: "firing at H1 leaves you immune that hour (launching IS your
+    # move), jams your own house at H2 and H3, and frees you from H4 — exactly
+    # when a blind grab lands and lifts. Plan nothing in H2-H3; plan the walk-in
+    # after them." Hence combines_with="blind_grab".
+    #
+    # NO `rationale` OVERRIDE. In round 6 I hand-wrote one because the composed
+    # text let `yield: red ~+0` disqualify the play. The retrofitted forge now
+    # ships `_DENIAL_VALUE["chaff"]`, which makes that argument better than mine
+    # and places it BEFORE the yield line: "THIS IS A THEFT, NOT A DENIAL —
+    # score it that way ... Its yield line says 'unknown' because it is
+    # measuring the blind cell you land on, not the pure you inherit." Let the
+    # kit argue. Overriding would throw away the fix.
+    #
+    # No trigger: `redsign_theirs` is a built-in `when`, and chaff needs no
+    # target cell (`_AIMED["chaff"] == 0`), so there is nothing to aim and
+    # nothing to keep clear of.
+    WeaponPlay(
+        play_id="EGRESS_JAM",
+        weapon="chaff",
+        when="redsign_theirs",
+        hour="super_early",
+        combines_with="blind_grab",
+        why=("a rival has broadcast a pure so every seat is racing it at first "
+             "light, and one flare at H1 cancels that hour for all of them at "
+             "no credit cost, leaving the pure unharvested and us free from H4 "
+             "to walk in behind them"),
     ),
 )
