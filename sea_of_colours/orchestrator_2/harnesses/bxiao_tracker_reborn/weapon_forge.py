@@ -53,12 +53,33 @@ COMBINES_CHOICES = (
     "standalone",   # denial only, banks nothing itself
 )
 
+# TARGETS — where the aim points come from. An unlisted value used to fall
+# through to the pattern path in SILENCE, which is how `finder_probe` shipped
+# dead: the play was offered every night, borrowed seam geometry, and nobody
+# could see that the target mode it declared had never run. Validated in
+# `problems()` now, like the three axes above.
+TARGETS_CHOICES = (
+    "pattern",         # borrow the seam pattern's wave-1 drop (default)
+    "rival_probes",    # the freshest rival probes, via scorch.probe_targets
+    "redsign",         # the rival seam, via scorch.redsign_targets
+    "finder_probe",    # the ONE eye lighting a rival's beacon
+    "contested_pure",  # a pure WE see that a rival eye also covers
+)
+
 # Engine facts. Wire verb and REPLAY tag are NOT always the same string:
 # ``snap_launch`` on the wire arrives as ``snap`` in the replay frame, and a
 # tag set keyed on the verb silently drops every frame — the agent then
 # journals that the move never executed and corrupts the next night.
 _WIRE_VERB = {"emp": "emp_launch", "chaff": "chaff_flare", "snap": "snap_launch"}
-_FRAME_TAG = {"emp": "emp_launch", "chaff": "chaff_flare", "snap": "snap"}
+#: The replay FRAME tag per weapon. Identical to the wire verb for all three —
+#: this used to map snap to "snap" on the belief that the engine wrote a
+#: different spelling for the frame than for the wire. v12 v1.48 corrected that
+#: comment in `last_night.py`: "The engine writes the frame as ``snap_launch``
+#: — the same spelling as the wire verb, exactly like ``emp_launch`` beside it."
+#: It happened to keep working only because both spellings sat in
+#: `_OWN_ACTION_TAGS`; remove the redundant one and a forged snap agent would
+#: silently stop rendering its own fire.
+_FRAME_TAG = dict(_WIRE_VERB)
 
 # How many cells a launch aims at. Chaff aims at NOTHING — it takes no cell.
 _AIMED = {"emp": 3, "snap": 1, "chaff": 0}
@@ -106,10 +127,14 @@ class WeaponPlay:
     trigger: Optional[Callable[[Mapping[str, Any]], Sequence[Cell]]] = None
     menu_rank: int = 0
 
-    #: Where the aim points come from.
-    #:   "pattern"      — borrow the seam pattern's wave-1 drop (default)
-    #:   "rival_probes" — the freshest rival probes, via scorch.probe_targets
-    #:   "redsign"      — the rival seam, via scorch.redsign_targets
+    #: Where the aim points come from. One of TARGETS_CHOICES.
+    #:   "pattern"        — borrow the seam pattern's wave-1 drop (default)
+    #:   "rival_probes"   — the freshest rival probes, via scorch.probe_targets
+    #:   "redsign"        — the rival seam, via scorch.redsign_targets
+    #:   "finder_probe"   — the ONE eye lighting a rival's beacon
+    #:   "contested_pure" — a pure WE can see that a rival eye also covers.
+    #:                      The pure is the only cell where their drop is
+    #:                      PREDICTABLE, so it is the only honest snap target.
     targets: str = "pattern"
 
     #: How many steps the follow-up walk may take. The salvo, an optional
@@ -118,7 +143,37 @@ class WeaponPlay:
 
     #: Launch a probe beside the landing so the walk is lit. Placed ADJACENT to
     #: the drop, never on it — landing a harvester on your own probe crushes it.
+    #: Requires ``take_the_ground``; a probe lighting a walk nobody takes is a
+    #: probe thrown away.
     probe_the_comb: bool = False
+
+    #: Should this play ALSO take the ground it denied? Default NO, and keep it
+    #: that way unless the follow-up is genuinely inseparable from the shot.
+    #:
+    #: A WEAPON PLAY BUYS AN HOUR. IT SHOULD RARELY BUY ANYTHING ELSE.
+    #:
+    #: A denial-only play compiles to the launch and nothing more, which leaves
+    #: the harvester free for the seam option the thinker picked alongside it —
+    #: and that option's geometry is better than ours, because computing landings
+    #: and combs is the whole job of `seam_control`. Measured cost of getting this
+    #: wrong: a chaff play carrying its own comb produced
+    #: ``[plan=aggressive: CANCEL_DROP, BLIND_AND_GRAB, PR3, PR1]`` where the
+    #: flare fired, the two probes went out, and the harvester NEVER DEPLOYED —
+    #: the weapon and the grab each half-owned the follow-up and neither ran it.
+    #:
+    #: Turn it on for ONE case only: an EMP, whose comb is the smear MINUS its
+    #: own blast. Friendly fire is on, so only the EMP play knows which cells its
+    #: three missiles darkened — a separately-chosen grab would walk into our own
+    #: cloud and be disabled hour by hour. That comb has to be self-contained.
+    #:
+    #: A SNAP NEVER TAKES ITS OWN GROUND. The snap owns the cell for exactly one
+    #: hour, so you PHYSICALLY cannot land on it until it goes cold at H2 — which
+    #: means the grab is a separate play the thinker picks alongside (name it in
+    #: ``combines_with``). Carrying your own harvester there just double-books the
+    #: cell against the paired grab and evicts the richer ring grab from the
+    #: two-harvester budget. Fire denial-only and name the pairing, like
+    #: ``CANCEL_DROP -> blind_grab``.
+    take_the_ground: bool = False
 
     #: Refuse to fire below this many real aim points. A charge fires all its
     #: missiles whether or not you aimed them, so on a thin board the spare
@@ -164,6 +219,19 @@ class WeaponPlay:
             bad.append(
                 f"{self.play_id}: combines_with must be one of {COMBINES_CHOICES}"
             )
+        if self.targets not in TARGETS_CHOICES:
+            bad.append(
+                f"{self.play_id}: targets={self.targets!r} is not one of "
+                f"{TARGETS_CHOICES}. An unknown mode does not raise — it "
+                "silently borrows seam geometry instead, so the play still "
+                "gets offered and you never find out."
+            )
+        if self.probe_the_comb and not self.take_the_ground:
+            bad.append(
+                f"{self.play_id}: probe_the_comb needs take_the_ground=True. "
+                "A probe placed to light a walk this play does not take is a "
+                "probe spent on nothing."
+            )
         if not self.why.strip():
             bad.append(
                 f"{self.play_id}: needs a `why` — one sentence on what firing "
@@ -192,6 +260,131 @@ class WeaponPlay:
 # Part 4 matters more than it looks. A rationale that hides its downside reads
 # as a sales pitch and the model discounts the whole thing.
 
+#: The menu prices every option in YIELD — points banked tonight. A denial
+#: weapon banks nothing, so it is rendered as "yield: unknown ... ~4% chance"
+#: next to a GRAB with certain points, and it loses every time. It is being
+#: scored on the wrong axis.
+#:
+#: These sentences move the comparison onto the axis the weapon actually wins
+#: on: points the RIVAL does not bank, and tempo they cannot recover. Stated
+#: BEFORE the model reads the yield line, so the low yield is expected rather
+#: than disqualifying.
+_DENIAL_VALUE = {
+    "chaff": (
+        "THIS IS A THEFT, NOT A DENIAL — score it that way. Cancelling their "
+        "hour-one drop cancels their smash-and-grab, so the pure is STILL "
+        "THERE, unharvested, and you are the one who knows it. Its yield line "
+        "says 'unknown' because it is measuring the blind cell you land on, "
+        "not the pure you inherit. You need no vision and no probe: chaff "
+        "takes no target cell, it is fired at an HOUR, and their redsign "
+        "already told you where and when — so a pure you have never seen is a "
+        "fine target. And the clock favours you: firing at H1 leaves you "
+        "immune that hour (launching IS your move), jams your own house at H2 "
+        "and H3, and frees you from H4 — exactly when a blind grab lands and "
+        "lifts. Plan nothing in H2-H3; plan the walk-in after them"
+    ),
+    "emp": (
+        "SCORE THIS AS DENIAL, NOT YIELD. One charge darkens ~13 cells for "
+        "EIGHT HOURS across 3 missiles. Probes inside are destroyed and "
+        "harvesters disabled — you are removing their vision and their tempo "
+        "for most of the night, not banking points tonight. The follow-up comb "
+        "adapts to the smear: if enough of it sits OUTSIDE your own cloud, you "
+        "comb that exposed edge now; if not, you WAIT the eight hours out and "
+        "comb the interior once the cloud clears — ground nobody else could "
+        "enter while it burned, so it is yours unopposed at hour nine"
+    ),
+    "snap": (
+        "SCORE THIS AS A LANDING REFUSED, NOT AS VISION DENIED. A snap makes "
+        "one cell HOT FOR ONE HOUR: a rival landing into it is refused OUTRIGHT "
+        "and the hull is damaged in orbit — they lose the harvester's whole "
+        "night, not just the harvest. It guards a square rather than punishing "
+        "one unit, so it also catches anything that ARRIVES during the hour, and "
+        "it catches EVERY seat that comes, not just one. And it resolves ABOVE "
+        "the hour-start vision snapshot, so it can deny the very drop its target "
+        "beacon was validating — an EMP resolves below and never can."
+    ),
+}
+
+#: Target-specific override for the denial line. A snap aimed at a contested
+#: pure and a snap aimed at a finder eye are DIFFERENT plays that happen to
+#: share a verb, and the argument for each contradicts the other — "aim at the
+#: ground, not the eye" is right for one and sabotage for the other. Keyed by
+#: (weapon, targets); falls back to `_DENIAL_VALUE[weapon]` when absent.
+_DENIAL_VALUE_BY_TARGET: Dict[Tuple[str, str], str] = {
+    ("snap", "contested_pure"): (
+        _DENIAL_VALUE["snap"] + " AIM AT THE GROUND THEY WANT. The one cell "
+        "whose occupation you can PREDICT is a pure — the square worth a "
+        "smash-and-grab, so that is where they land. You CAN see it: a pure is a "
+        "`red_tiles` row at purity 255, and one a rival probe also covers is a "
+        "READ, not a guess. The cell is hot for YOU too, but only that hour, so "
+        "you PHYSICALLY cannot land on your own snap at H1. This play fires "
+        "DENIAL-ONLY: pair it with exactly ONE grab (SMASH_GRAB / GRAB1) and "
+        "that grab lands on the cold pure at H2 for 100 blue. Do NOT make the "
+        "snap take its own ground and do NOT stack a second grab on the cell — "
+        "either one double-books it and the later drop hits stripped green."
+    ),
+    ("snap", "finder_probe"): (
+        _DENIAL_VALUE["snap"] + " HERE THE PURE IS FOGGED TO YOU, so aim at the "
+        "one thing you CAN hit: the probe that found it. Killing the SOLE finder "
+        "refuses their drop for lack of live vision THIS night (§3.9.7) — the "
+        "same thing a 300-blue chaff buys, for 100. This is not the pure-square "
+        "play; you cannot see the square, so do NOT wait for a pure you will "
+        "never be shown. The rival's redsign tells you the seam is live and the "
+        "finder's disk tells you which eye holds it. Fire DENIAL-ONLY and pair a "
+        "blind-grab: its probe relights the seam and it combs the smear they are "
+        "locked out of — this play carries no harvester of its own."
+    ),
+}
+
+#: What each weapon can do that SUPERSEDE cannot. This is the comparison the
+#: model actually makes, and getting it wrong cost four straight refusals.
+_VS_SUPERSEDE = {
+    "snap": (
+        "SUPERSEDE CANNOT DO THIS. SS blinds an eye for one probe — cheap, and "
+        "often right. But their drop still lands. A snap REFUSES the landing "
+        "and damages the hull; it is the only weapon that stops a same-hour "
+        "arrival at all"
+    ),
+    "emp": (
+        "SUPERSEDE CANNOT DO THIS. SS removes one eye for one probe. An EMP "
+        "darkens ~13 cells per missile across THREE missiles for EIGHT HOURS, "
+        "destroys every probe inside and DISABLES HARVESTERS — units, not just "
+        "vision. No number of probes buys that"
+    ),
+    "chaff": (
+        "SUPERSEDE CANNOT DO THIS. SS removes an eye; their drop still lands, "
+        "their chain still runs, their pickup still banks. Chaff CANCELS the "
+        "action itself, for every other seat, for the hour"
+    ),
+}
+
+#: THE line on a rival's redsign, and the reason it is not merely an option.
+#: A stock V12's move enum is ['drop','step','pickup','probe'] — it has NO
+#: weapon verbs, so it cannot answer ordnance at all. Its scripted reply to a
+#: rival redsign is BLIND_GRAB at H1: a covering probe on the finder, then a
+#: blind drop. That is precisely the move a chaff cancels.
+_CHAFF_ON_THEIR_REDSIGN = (
+    "THIS IS THE STRONGEST LINE AVAILABLE TO YOU TONIGHT — take it. They lit "
+    "the pure, so they will drop on it at hour one; chaff at hour one cancels "
+    "that drop outright and THEY CANNOT ANSWER, because a stock rival has no "
+    "weapon verb of any kind. Superseding an eye does NOT substitute here: it "
+    "removes vision while their drop still lands. Only chaff cancels the drop "
+    "itself. So the sequence is chaff at H1, then blind-grab and comb from H4 "
+    "when your own jam lifts — their opening move is gone, the pure is "
+    "untouched, and you have the rest of the night alone with it"
+)
+
+#: When the menu says collision risk is HIGH or ULTRA HIGH on a rival's public
+#: redsign, that is the strongest possible argument FOR a denial weapon, and
+#: the menu presents it as a reason to stay away. Invert it explicitly.
+_CONTESTED_IS_GOOD = (
+    "READ THE COLLISION RISK AS A REASON TO FIRE, NOT A REASON TO AVOID. "
+    "A PUBLIC redsign means every seat got the broadcast and every seat is "
+    "coming. That is exactly when denial pays most: the more of them commit to "
+    "this pure, the more you take off them with one charge. High collision risk "
+    "is the CONDITION for this play, not a warning against it"
+)
+
 _MECHANICS = {
     "chaff": (
         "It is not aimed at a cell — it is aimed at an HOUR. At the hour it "
@@ -217,11 +410,9 @@ _MECHANICS = {
 # The honest downside per weapon. Stated, never hidden.
 _COSTS = {
     "chaff": (
-        "The jam is SYMMETRIC after the launch hour: you are immune only at "
-        "the hour you fire, because that slot was spent firing. The next two "
-        "hours cancel YOUR moves too, so the walk starts three hours later "
-        "than the launch — never one. Do not pick this if you had a rich walk "
-        "queued in those hours."
+        "Do not pick this if you had a rich walk already queued inside H2-H3 — "
+        "those hours are yours to lose, and a banked chain you cancel yourself "
+        "is a worse trade than the pure you are stealing"
     ),
     "emp": (
         "Friendly fire is ON — your own units in the cloud are not immune. "
@@ -247,13 +438,17 @@ _COSTS = {
 # Instead: list the ids this pairing might really compete with, in preference
 # order, and describe whichever one is ACTUALLY present tonight.
 _RIVAL_IDS = {
-    "blind_grab": ("BLIND_GRAB", "BLIND_AND_GRAB", "UNBEATEN_FLANK",
+    "blind_grab": ("SS", "BLIND_GRAB", "BLIND_AND_GRAB", "UNBEATEN_FLANK",
                    "CONTEST_DENY", "WALKIN_GRAB", "WALK_IN"),
     "smash_grab": ("SMASH_GRAB", "SMASH_GRAB_VALUE", "SEEN_GRAB",
                    "SECURE_MASS", "FULL_SWEEP"),
     "probe":      ("PR", "PRSNAP"),
     "chain":      ("CH", "GRAB"),
-    "standalone": ("GRAB", "CH", "SMASH_GRAB", "BLIND_GRAB"),
+    # SS first: supersede is what a model ACTUALLY reaches for instead of
+    # ordnance, because it denies for one probe instead of 300 blue. Four
+    # straight refusals were the model choosing SS1..SS4 while the rationale
+    # argued against a harvest chain nobody was considering.
+    "standalone": ("SS", "GRAB", "CH", "SMASH_GRAB", "BLIND_GRAB"),
 }
 
 # How to describe each one once we know it is on the menu. Keyed by the id
@@ -276,6 +471,10 @@ _RIVAL_PROSE = {
     "SECURE_MASS": "banks the mass halo with a covering probe, lower ceiling and "
                    "near-certain",
     "FULL_SWEEP": "combs the whole seam with one unit",
+    "SS": "spends ONE PROBE to blind one rival probe — far cheaper than "
+          "ordnance, and on a quiet night it is often the better buy. But it "
+          "only removes an EYE: their drop still lands, their chain still "
+          "runs, their pickup still banks. It cannot CANCEL an action",
     "PR": "a bare probe buys vision and banks nothing tonight",
     "PRSNAP": "insures a landing for one probe, but protects our grab rather "
               "than costing them anything",
@@ -294,7 +493,10 @@ def _resolve_rival(p: "WeaponPlay", present: Sequence[str]) -> str:
     ids = list(present or ())
     for want in _RIVAL_IDS.get(p.combines_with, ()):
         for have in ids:
-            if have == want or (want in ("PR", "PRSNAP", "CH", "GRAB", "BL")
+            # SS belongs here: the real ids are SS1..SS4, so leaving it out of
+            # the numbered-family list meant `SS` never matched and the clause
+            # fell through to a seam pattern the model was not weighing.
+            if have == want or (want in ("PR", "PRSNAP", "CH", "GRAB", "BL", "SS")
                                 and have.startswith(want)
                                 and have[len(want):].isdigit()):
                 prose = _RIVAL_PROSE.get(want, "")
@@ -323,8 +525,25 @@ def compose_rationale(p: "WeaponPlay",
     if p.rationale.strip():
         return p.rationale
     cost = _blue_cost(p.weapon)
-    return " ".join([
-        f"WHY: {p.why.strip().rstrip('.')}.",
+    parts = [
+        # No "WHY:" prefix — agency.py:1373 already prints one, and the menu
+        # was rendering "WHY: WHY: ...".
+        f"{p.why.strip().rstrip('.')}.",
+        # Target-specific denial line wins over the weapon default: a snap on a
+        # pure and a snap on an eye argue for opposite aims, so the wrong one
+        # tells the model not to take the play it is looking at.
+        _DENIAL_VALUE_BY_TARGET.get((p.weapon, p.targets))
+        or _DENIAL_VALUE.get(p.weapon, ""),
+    ]
+    parts.append(_VS_SUPERSEDE.get(p.weapon, ""))
+    if p.when in ("redsign_theirs", "always"):
+        parts.append(_CONTESTED_IS_GOOD)
+    if p.weapon == "chaff" and p.when in ("redsign_theirs", "always"):
+        parts.append(_CHAFF_ON_THEIR_REDSIGN)
+    # Each block is authored without a trailing stop so it can be reused; add
+    # one when joining, or the prompt reads as one unpunctuated wall.
+    parts = [x.strip().rstrip(".") + "." for x in parts if x and x.strip()]
+    return " ".join(parts + [
         _MECHANICS.get(p.weapon, ""),
         f"Costs {cost} blue and one hour-slot at hour {p.at_hour}.",
         f"COMPARE: {_resolve_rival(p, present)}.",
@@ -370,56 +589,97 @@ def _pattern_targets(p: "WeaponPlay", pattern: Any) -> Tuple[Optional[Cell], Lis
     return (tuple(drop) if drop else None), comb
 
 
-def _redsign_state(agent_view: Mapping[str, Any],
-                   seam_patterns: Sequence[Any]) -> str:
-    """"mine" | "theirs" | "none" — whose pure, if any, is lit tonight.
+def _redsign_states(
+    agent_view: Mapping[str, Any],
+    seam_patterns: Sequence[Any] = (),
+) -> set:
+    """Every redsign condition true tonight — a SET, not one value.
 
-    Reads the PATTERNS first because they carry engine-truth ownership on
-    ``mine``; falls back to the raw view so "no redsign" is still answerable on
-    a board where no pattern was built.
+    This used to return a single string with ``mine`` taking precedence, which
+    was wrong on any board with more than two seats: a rival's redsign and our
+    own are SIMULTANEOUSLY true, and collapsing them meant a
+    ``when="redsign_theirs"`` play silently never fired on a night we also had a
+    pure lit. Measured cost: a snap agent held a full rack for five straight
+    nights and was never once offered either of its plays, because it was
+    finding its own pures — the better it played, the less its weapon worked.
     """
+    out: set = set()
     for pat in seam_patterns or []:
         if getattr(pat, "mine", None):
-            return "mine"
-    for pat in seam_patterns or []:
-        if getattr(pat, "waves", None) is not None:
-            return "theirs"
+            out.add("mine")
+        elif getattr(pat, "waves", None) is not None:
+            out.add("theirs")
     rows = agent_view.get("redsign") or []
-    if not rows:
-        return "none"
     for r in rows:
-        if isinstance(r, Mapping) and r.get("mine"):
-            return "mine"
-    return "theirs"
+        if isinstance(r, Mapping):
+            out.add("mine" if r.get("mine") else "theirs")
+    if not out:
+        out.add("none")
+    return out
 
 
-def _when_holds(p: "WeaponPlay", state: str) -> bool:
-    """Does this play's WHEN match tonight's redsign state?"""
+def _when_holds_any(p: "WeaponPlay", states: set) -> bool:
+    """Does this play's WHEN match any condition true tonight?"""
     if p.when == "always":
         return True
-    if p.when == "redsign_mine":
-        return state == "mine"
-    if p.when == "redsign_theirs":
-        return state == "theirs"
     if p.when == "no_redsign":
-        return state == "none"
-    return True  # "other" is decided by p.trigger
+        # Only on a genuinely quiet night — nobody has lit anything.
+        return states == {"none"}
+    if p.when == "redsign_mine":
+        return "mine" in states
+    if p.when == "redsign_theirs":
+        # True even if we ALSO have one lit. That is the whole fix.
+        return "theirs" in states
+    return False
 
 
 def _aim_points(
     p: "WeaponPlay",
     agent_view: Mapping[str, Any],
     seam_patterns: Sequence[Any],
-) -> Tuple[List[Cell], List[Cell], List[str]]:
-    """(aim cells, comb path, notes) for a play. Empty aim means do not offer.
+) -> Tuple[List[Cell], List[Cell], List[str], Dict[str, Any]]:
+    """``(aim cells, comb path, notes, extras)`` for a play.
+
+    Empty ``aim`` means do not offer. ``extras`` carries anything the packer
+    needs beyond geometry — currently only ``wait_before_drop``, an int number
+    of extra ``wait`` moves the packer inserts between the launch and the
+    landing. Zero on every path except LIGHTS_DOWN's delayed-comb branch.
 
     ``scorch`` is imported lazily and optionally: a fork that never needed EMP
     geometry does not carry it, and a missing module should degrade to the
     pattern path rather than crash the night.
     """
     notes: List[str] = []
+    extras: Dict[str, Any] = {}
 
-    if p.targets in ("rival_probes", "redsign"):
+    # NOTE the membership test. `finder_probe` was handled inside this block but
+    # missing from the tuple, so it never entered it: the play fell through to
+    # the pattern path, borrowed seam geometry and got offered every night
+    # looking healthy. Nothing raised, nothing logged. Add a mode here AND to
+    # TARGETS_CHOICES or it is dead on arrival.
+    if p.targets in ("rival_probes", "redsign", "finder_probe", "contested_pure"):
+        # A contested pure needs no scorch geometry — it reads `red_tiles` and
+        # rival probes straight off the view — so resolve it before the import.
+        if p.targets == "contested_pure":
+            found, _n = contested_pures(agent_view)
+            notes.extend(_n)
+            if len(found) < max(1, p.min_targets):
+                notes.append(
+                    f"{p.play_id}: {len(found)} contested pure(s), needs "
+                    f"{p.min_targets} — holding the charge"
+                )
+                return [], [], notes, extras
+            cell, n_eyes = found[0]
+            ok, why = contested_pure_gate(n_eyes)
+            notes.append(why)
+            if not ok:
+                return [], [], notes, extras
+            # Aim AT the pure, then take it. The snap is hot for ONE hour and
+            # is hot for US too, so the drop cannot share the hour — but the
+            # packer queues the comb after the launch, which puts the landing at
+            # H2 with the cell already cold again. Fire at H1, own it at H2.
+            return [cell], [cell], notes, extras
+
         try:
             from . import scorch
         except ImportError:
@@ -427,11 +687,37 @@ def _aim_points(
                 f"{p.play_id}: needs scorch.py for targets={p.targets!r} and it "
                 "is not in this fork"
             )
-            return [], [], notes
+            return [], [], notes, extras
         missiles = max(1, p.aims_at_cells)
+        if p.targets == "finder_probe":
+            probes, pure, region, _n = finder_probes(agent_view)
+            notes.extend(_n)
+            if not probes:
+                return [], [], notes, extras
+            ok, why = finder_gate(len(probes), pure is not None)
+            notes.append(why)
+            if not ok:
+                return [], [], notes, extras
+            aim = [probes[0]]                      # the freshest covering eye
+            # If the play asked to TAKE the smear it just blinded, plan a comb
+            # across the region. Snap is 1 cell for 1 hour, so from H2 onward
+            # the whole smear is cool — nothing to avoid. Plain plan_comb.
+            if p.take_the_ground and region is not None:
+                smear = [c for c in (scorch._cell(c) for c in
+                                     (region.get("cells") or [])) if c]
+                plan = plan_comb(agent_view, value_cells=smear, avoid=set(),
+                                 max_steps=p.comb_max_steps)
+                notes.extend(plan["notes"])
+                drop = plan["drop_at"]
+                if drop is not None:
+                    return aim, [drop] + list(plan["walk"]), notes, extras
+                # Fell through: no legal drop cell inside the smear. Fall back
+                # to the pure if visible, else denial-only.
+            comb = [pure] if pure else []
+            return aim, comb, notes, extras
+
         if p.targets == "rival_probes":
-            rows = agent_view.get("enemy_probes") or agent_view.get("rival_probes") or []
-            real = [r for r in rows if isinstance(r, Mapping)]
+            real = rival_eyes(agent_view)
             # Count REAL eyes before the salvo pads itself out. `probe_targets`
             # always returns `missiles` cells, so counting its output would make
             # min_targets meaningless.
@@ -440,9 +726,9 @@ def _aim_points(
                     f"{p.play_id}: {len(real)} rival probe(s), needs "
                     f"{p.min_targets} — holding the charge"
                 )
-                return [], [], notes
+                return [], [], notes, extras
             aim, why = scorch.probe_targets(agent_view, real, missiles=missiles)
-            return list(aim), [], notes + list(why)
+            return list(aim), [], notes + list(why), extras
         # scorch.redsign_targets reads the rival smear off the view itself and
         # REFUSES an own redsign outright ("scorching a redsign you found
         # yourself denies your own harvesters the ground"), so the
@@ -452,35 +738,62 @@ def _aim_points(
                 agent_view, radius=scorch.RADIUS, missiles=missiles)
         except Exception as exc:                        # noqa: BLE001
             notes.append(f"{p.play_id}: redsign_targets refused ({exc})")
-            return [], [], notes
+            return [], [], notes, extras
         notes.extend(list(why or []))
         if not aim:
-            return [], [], notes
-        # The comb is the smear MINUS our own blast: ground worth walking that
-        # our charge did not just darken. Walking into our own cloud disables
-        # the harvester hour by hour — friendly fire is on.
+            return [], [], notes, extras
+        # Try the SAFE-EDGE path first: the smear MINUS our own blast, walked
+        # NOW while the cloud is still up. Friendly fire is on, so anything
+        # inside the cloud disables the harvester hour by hour — plan_comb
+        # avoids it.
         dark = scorch.blast(aim, scorch.RADIUS)
         smear = [c for c in (scorch._cell(c) for c in
                              ((region or {}).get("cells") or [])) if c]
-        # A filtered SET of walkable cells is not a PATH — plan_comb turns it
-        # into a contiguous serpentine that never enters our own cloud, and
-        # trims it to the move cap.
-        plan = plan_comb(agent_view, value_cells=smear, avoid=dark,
-                         max_steps=p.comb_max_steps)
-        notes.extend(plan["notes"])
-        drop = plan["drop_at"]
+        edge_plan = plan_comb(agent_view, value_cells=smear, avoid=dark,
+                              max_steps=p.comb_max_steps)
+        edge_walk = list(edge_plan.get("walk") or [])
+        edge_drop = edge_plan.get("drop_at")
+        # A "walk" of length 1 is just the drop cell — no steps banked. On a
+        # small smear the safe edge is empty or trivial, so this switches to
+        # the INTERIOR comb after the 8h cloud clears. Ground nobody else could
+        # enter while we waited becomes ours at H9, unopposed.
+        if edge_drop is not None and len(edge_walk) >= _MIN_EXPOSED_EDGE:
+            notes.extend(edge_plan["notes"])
+            return list(aim), [edge_drop] + edge_walk, notes, extras
+        interior = plan_comb(agent_view, value_cells=smear, avoid=set(),
+                             max_steps=p.comb_max_steps)
+        notes.extend(interior["notes"])
+        drop = interior["drop_at"]
         if drop is None:
-            return [], [], notes
-        comb = [drop] + list(plan["walk"])
-        return list(aim), comb, notes
+            return [], [], notes, extras
+        # Wait through the cloud, then land on the interior. Fired at H1 the
+        # cloud runs H1-H8; H9 is the first cool hour, which is where the
+        # drop must land or the engine refuses it as landing into live cloud.
+        try:
+            from sea_of_colours.game.weapons import EMP_CLOUD_HOURS as _CH
+        except Exception:                                       # noqa: BLE001
+            _CH = 8
+        # Hours from move indices: index i is hour i+1. Sequence is launch
+        # (index 0 = H1), then wait_n waits, then the drop. The interior comb
+        # sits ENTIRELY inside the blast, so `probe_the_comb` finds nowhere
+        # legal to place a covering probe and none is emitted — the drop is the
+        # move right after the waits. For the drop to land at H(_CH+1):
+        #   1 (launch) + wait_n + 1 (drop) = _CH + 1  ->  wait_n = _CH - 1
+        wait_n = max(0, _CH - 1)
+        extras["wait_before_drop"] = wait_n
+        notes.append(
+            f"{p.play_id}: safe-edge comb only {len(edge_walk)} cell(s) — waiting "
+            f"{wait_n}h for the cloud to clear and combing the interior instead"
+        )
+        return list(aim), [drop] + list(interior["walk"]), notes, extras
 
     # default: borrow the pattern's wave-1 geometry
     for pat in seam_patterns or []:
-        if _when_holds(p, _redsign_state(agent_view, [pat])):
+        if _when_holds_any(p, _redsign_states(agent_view, [pat])):
             target, comb = _pattern_targets(p, pat)
             if target is not None:
-                return [target], comb, notes
-    return [], [], notes
+                return [target], comb, notes, extras
+    return [], [], notes, extras
 
 
 # ── option building (the agency.py hook calls this) ────────────────────────
@@ -504,7 +817,7 @@ def build_options(
     if option_cls is None:
         return out
 
-    state = _redsign_state(agent_view, seam_patterns)
+    states = _redsign_states(agent_view, seam_patterns)
     # Real ids on tonight's menu: whatever the caller already registered, plus
     # the seam patterns about to become options.
     menu_ids = list(present or ()) + [
@@ -520,13 +833,22 @@ def build_options(
         aim: List[Cell] = []
         comb: List[Cell] = []
         probe_at: Optional[Cell] = None
+        extras: Dict[str, Any] = {}
 
         if p.when == "other" and p.trigger is not None:
             aim = list(p.trigger(agent_view) or ())
         else:
-            if not _when_holds(p, state):
+            if not _when_holds_any(p, states):
                 continue
-            aim, comb, _notes = _aim_points(p, agent_view, seam_patterns)
+            aim, comb, _notes, extras = _aim_points(p, agent_view, seam_patterns)
+            # DENIAL-ONLY unless the play explicitly asked for the ground. The
+            # resolver computes a comb either way (a pattern play gets one for
+            # free from the seam geometry), so this is where it gets dropped —
+            # leaving `drop_at` None, which sends `_pack_weapon` down its
+            # "denial-only play: done" path and leaves the harvester for the grab
+            # option the thinker chose alongside.
+            if not p.take_the_ground:
+                comb = []
             if p.probe_the_comb and comb:
                 _pl = plan_comb(
                     agent_view, value_cells=comb,
@@ -553,12 +875,18 @@ def build_options(
                 "aim": [list(c) for c in aim],
                 "drop_at": list(comb[0]) if comb else None,
                 "comb": [list(c) for c in comb],
+                "denial_yield": denial_yield_line(
+                    {"comb": comb, "aim": aim, "weapon": p.weapon}, agent_view),
                 "probe_at": list(probe_at) if probe_at else None,
                 # The packager cannot read the view (``_Packer`` keeps
                 # harvesters and probe budget, not agent_view), so the rack
                 # count travels with the option. Same night, same number.
                 "stock": _stock(agent_view, p.weapon),
                 "aims_at_cells": p.aims_at_cells,
+                # Extra waits between the launch and the landing. Non-zero only
+                # on LIGHTS_DOWN's delayed-comb path, where the harvester holds
+                # off until the 8h cloud clears and then combs the interior.
+                "wait_before_drop": int(extras.get("wait_before_drop") or 0),
             },
             rationale=compose_rationale(p, menu_ids),
         )
@@ -608,8 +936,514 @@ def _execute_lines(p: "WeaponPlay", aim: Sequence[Cell],
             )
     return lines
 
-# ── combs — a reusable walk planner ────────────────────────────────────────
+# ── procurement — rung ZERO, and the one nobody checks ────────────────────
 #
+# A weapon you cannot BUY never reaches rung 1. The four rungs are all about
+# firing: know the rack, offer and compile, explain, survive doctrine. All four
+# can pass while the rack stays empty for the whole game, because the ORBITAL is
+# a separate code path that the night phase never touches.
+#
+# The concrete hole this exists to fill: stock `tabula_v12` orbit_policy can only
+# emit `build_chaff` and `build_emp`. There is no snap branch, no
+# `snap_stockpile_cap`, and no `snap_blue_cost` — even though `build_snap` is a
+# legal engine action (`game/policy.py:427`) and the v13 hand-wired fork
+# implements it. So a forged agent declaring a snap play passed every wiring
+# check and could never once arm the weapon.
+
+#: Weapons the STOCK orbital can already buy. Anything outside this set needs
+#: procurement added, or its plays can never fire.
+_ORBITAL_CAN_BUY = ("chaff", "emp")
+
+
+def unbuyable_weapons() -> Tuple[str, ...]:
+    """Declared weapons the stock orbital cannot acquire. Empty is good."""
+    return tuple(sorted(
+        w for w in _declared_weapons() if w not in _ORBITAL_CAN_BUY
+    ))
+
+
+def add_procurement(
+    actions: List[Dict[str, Any]],
+    descriptors: List[str],
+    agent_view: Mapping[str, Any],
+    *,
+    remaining: int,
+    weapons_enabled: bool = True,
+) -> int:
+    """Buy declared ordnance the stock orbital has no branch for.
+
+    Called just before ``plan_orbit_actions`` returns, so it sees what the rest
+    of the orbital already spent. Returns the credits left.
+
+    Ported from the v13 fork's snap branch: bought on sight up to the cap, on
+    the same doctrine as EMP — *the rack is never the reason a play did not
+    fire*.
+    """
+    eco = _economy()
+    # `weapons_enabled` is a keyword parameter on plan_orbit_actions, NOT a key
+    # on the view — reading it off the view would silently always be True and
+    # the forge would buy ordnance in a weapons-off game.
+    if not weapons_enabled:
+        return remaining
+
+    orbit = agent_view.get("orbit") or {}
+    stock = orbit.get("weapon_stock") or {}
+    blue = _blue_total(agent_view)
+
+    for weapon in unbuyable_weapons():
+        cap = (eco.hold_at or {}).get(weapon, 2)
+        have = int(stock.get(weapon) or 0)
+        if have >= cap:
+            descriptors.append(
+                f"{weapon.upper()} rack full ({have}/{cap}) — not buying"
+            )
+            continue
+        blue_cost = _blue_cost(weapon)
+        cred_cost = _credit_cost(weapon)
+        if blue < blue_cost or remaining < cred_cost:
+            short = (f"blue {blue}/{blue_cost}" if blue < blue_cost
+                     else f"credits {remaining}/{cred_cost}")
+            descriptors.append(
+                f"wanted a {weapon.upper()} and could not afford it ({short})"
+            )
+            continue
+        actions.append({"a": f"build_{weapon}", "count": 1})
+        remaining -= cred_cost
+        blue -= blue_cost
+        descriptors.append(
+            f"built {weapon.upper()} on sight ({blue_cost} blue, "
+            f"rack {have} < {cap}) — the stock orbital has no branch for this "
+            "weapon, so the forge buys it"
+        )
+    return remaining
+
+
+#: Credits, not blue. Chaff is FREE in credits and 300 in blue; snap and emp are
+#: 250 credits each. Read from the engine so a rebalance cannot desync us.
+_FALLBACK_CREDITS = {"emp": 250, "chaff": 0, "snap": 250}
+
+
+def _credit_cost(weapon: str) -> int:
+    try:
+        from sea_of_colours.game import weapons as _w
+        return int(_w.CREDIT_COST_BY_KIND.get(
+            weapon, _FALLBACK_CREDITS[weapon]))
+    except Exception:                                   # noqa: BLE001
+        return _FALLBACK_CREDITS.get(weapon, 250)
+
+
+def _blue_total(agent_view: Mapping[str, Any]) -> int:
+    """BLUE the seat holds — the weapons currency.
+
+    Mirrors `orbit_policy._blue_purity_total` EXACTLY. The key is
+    `blue_purity_total`, with a fallback that sums BLUE `hoard_parcels`. Reading
+    a plausible-looking `blue_purity` instead returns 0 on every real board, so
+    procurement would silently never fire.
+    """
+    orbit = agent_view.get("orbit") or {}
+    total = orbit.get("blue_purity_total")
+    if total is not None:
+        try:
+            return int(total)
+        except (TypeError, ValueError):
+            pass
+    blue = 0
+    for parcel in orbit.get("hoard_parcels") or []:
+        if str(parcel.get("colour", "")).upper() == "BLUE":
+            try:
+                blue += int(parcel.get("purity", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+    return blue
+
+
+# ── finder-probe targeting: the strong snap, and the one nobody could reach ──
+#
+# A redsign exists BECAUSE a probe found it, so the finder's eye must be
+# covering the beacon `center`. You do NOT need `pure_cells` to work that out —
+# the reference fork gated its SNAP_STRIKE on that field, the seat view does not
+# carry it, and the option therefore never appeared on a menu in three whole
+# seasons while the weak SNAP_KILL was offered 28 times and correctly refused
+# every time.
+#
+# Why the sole eye matters: their drop is only legal while something gives them
+# live vision of the cell. A SNAP resolves ABOVE the hour-start vision snapshot,
+# so killing that one probe refuses their drop THAT NIGHT (§3.9.7). A supersede
+# kills the same probe but resolves BELOW the snapshot — `live` is already
+# computed, so the drop still lands. That timing difference is the whole play,
+# and at 100 blue it buys what a 300-blue chaff buys.
+
+_PROBE_VISION_R = 4          # Euclidean disk, matches scorch.probe_vision_radius
+
+#: Purity at which a red tile IS a pure. The seat view strips `pure_cells`, so
+#: this is how you find one: a `red_tiles` row at full purity inside our live
+#: vision. Reading the stripped key instead and concluding pures are invisible
+#: is a wrong turn that costs a whole class of snap play.
+_PURE_MIN = 255
+
+#: Below this many exposed-edge cells (smear MINUS our own blast), an EMP
+#: play switches from combing the safe edge tonight to WAITING for the cloud
+#: to clear and combing the interior at H9+. Four is roughly what a two-step
+#: chain banks; any less is a walk not worth an hour.
+_MIN_EXPOSED_EDGE = 4
+
+
+def rival_eyes(agent_view: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Known rival probe positions, freshest first. THE only correct source.
+
+    ``[{"at": (x, y), "day_seen": int, "source": str}, ...]``.
+
+    Delegates to the harness's own ``_v7.probe_hints._enemy_probe_cells``, which
+    stitches together the FOUR channels a rival probe can arrive on — a probe
+    launch is PUBLIC (§3.15), so the station sees it even through fog:
+
+      * ``competitor_intel.new_this_day`` with kind ``enemy_probe_launch``
+      * ``competitor_intel.persistent_echoes``
+      * ``world.echo`` rows with ``via='probe_launch'``
+      * ``entities.echoes``
+
+    This function exists because every probe-targeting mode in this file used to
+    read ``agent_view["enemy_probes"]`` or ``["rival_probes"]``, and NEITHER KEY
+    EXISTS on a real board. The seat view carries no flat probe list at all. So
+    `finder_probe`, `rival_probes` and `contested_pure` all resolved zero eyes
+    every night of every season and refused in silence — the plays looked
+    declared, wired and healthy, and could never fire.
+
+    The lesson generalises past this bug: a plausible key name is not a channel.
+    Check what the view actually carries, or better, call the baseline's own
+    extractor so there is one place to be wrong.
+    """
+    try:
+        from ._v7.probe_hints import _enemy_probe_cells
+        rows = list(_enemy_probe_cells(agent_view) or [])
+        if rows:
+            return rows
+    except Exception:                                   # noqa: BLE001
+        pass
+    # Fallback for synthetic fixtures and tests, which hand us a flat list
+    # directly. Never reached on a real board.
+    out: List[Dict[str, Any]] = []
+    for row in (agent_view.get("enemy_probes")
+                or agent_view.get("rival_probes") or []):
+        if not isinstance(row, Mapping):
+            continue
+        at = row.get("at")
+        if not (at and len(at) >= 2):
+            if "x" in row and "y" in row:
+                at = (row["x"], row["y"])
+            else:
+                continue
+        out.append({"at": (int(at[0]), int(at[1])),
+                    "day_seen": int(row.get("day_seen") or 0),
+                    "source": "fixture"})
+    return out
+
+
+def finder_probes(
+    agent_view: Mapping[str, Any],
+) -> Tuple[List[Cell], Optional[Cell], Optional[Mapping[str, Any]], List[str]]:
+    """Rival probes covering a RIVAL redsign's beacon, freshest first.
+
+    Returns ``(probes, pure_cell_or_None, region_or_None, notes)``. The second
+    value is the exact pure IF we can see it ourselves — a live ``red_tiles``
+    row at ``purity >= 255`` inside the smear. The third is the rival redsign
+    region itself, so a caller that wants to comb the smear after killing the
+    eye does not have to scan for the region a second time. Seeing the pure
+    turns pure denial into denial-plus-take, because we can then drop on it
+    ourselves.
+    """
+    notes: List[str] = []
+    best: Optional[Tuple[List[Cell], Optional[Cell], int]] = None
+
+    for region in (agent_view.get("redsign") or []):
+        if not isinstance(region, Mapping) or region.get("mine"):
+            continue
+        centre = region.get("center") or region.get("centre")
+        if not centre or len(centre) < 2:
+            continue
+        cx, cy = float(centre[0]), float(centre[1])
+
+        covering: List[Tuple[Cell, int]] = []
+        for row in rival_eyes(agent_view):
+            cell = tuple(row["at"])
+            dx, dy = cell[0] - cx, cell[1] - cy
+            if dx * dx + dy * dy <= _PROBE_VISION_R ** 2:
+                covering.append((cell, int(row.get("day_seen") or 0)))
+        if not covering:
+            continue
+        covering.sort(key=lambda t: -t[1])          # freshest first
+
+        # Do we SEE the pure inside this smear? purity 255 == pure.
+        smear = {tuple(c) for c in (region.get("cells") or []) if len(c) >= 2}
+        pure: Optional[Cell] = None
+        for t in (agent_view.get("red_tiles") or []):
+            if not isinstance(t, Mapping):
+                continue
+            if int(t.get("purity") or 0) < _PURE_MIN:
+                continue
+            cell = (int(t.get("x", -1)), int(t.get("y", -1)))
+            if cell in smear:
+                pure = cell
+                break
+
+        cand = ([c for c, _ in covering], pure, region, len(covering))
+        if best is None or cand[3] < best[3]:      # fewest eyes = strongest
+            best = cand
+
+    if best is None:
+        notes.append("no rival probe is covering a rival beacon")
+        return [], None, None, notes
+
+    probes, pure, region, n = best
+    notes.append(
+        f"{n} rival probe(s) cover their beacon"
+        + (f"; we SEE the pure at {list(pure)}" if pure else
+           "; we cannot see the pure itself")
+    )
+    return probes, pure, region, notes
+
+
+def finder_gate(n_covering: int, sees_pure: bool) -> Tuple[bool, str]:
+    """Should a snap fire against ``n_covering`` eyes? With the reason.
+
+    One eye is the strong case. Two is worth taking ONLY when we can see the
+    pure, because then the shot buys us the ground as well as denying it.
+    """
+    if n_covering <= 1:
+        return True, (
+            "STRONG — this is their SOLE eye on the beacon. A snap resolves "
+            "ABOVE the vision snapshot, so killing it refuses their drop for "
+            "lack of live vision THIS NIGHT (§3.9.7). That is exactly what a "
+            "300-blue chaff buys, for 100"
+        )
+    if n_covering == 2 and sees_pure:
+        return True, (
+            "DEGRADED BUT WORTH IT — two eyes cover the beacon, so one shot "
+            "leaves the drop legal from the other. Take it anyway only because "
+            "we can SEE the pure: we are buying the ground, not just the denial"
+        )
+    if n_covering == 2:
+        return False, (
+            "DEGRADED — two eyes, and we cannot see the pure. One shot leaves "
+            "their drop legal from the other eye: half the denial for the whole "
+            "cost. Hold the charge"
+        )
+    return False, (
+        f"WEAK — {n_covering} eyes cover the beacon. Killing one is "
+        "one-in-many denial and the drop still lands. Hold the charge for a "
+        "lower-vision target"
+    )
+
+
+def contested_pures(
+    agent_view: Mapping[str, Any],
+) -> Tuple[List[Tuple[Cell, int]], List[str]]:
+    """Pures WE can see that a rival eye ALSO covers. Most-watched first.
+
+    This is the reverse of ``finder_probes`` and it is the right way round for a
+    snap. That function starts from a rival redsign region and walks out to the
+    eyes; this one starts from every pure in our own live vision and asks
+    whether a rival can see it too. It therefore fires on boards with no
+    broadcast redsign at all — a rival probe sitting within vision range of a
+    pure means they have the read whether or not anyone lit a beacon.
+
+    Why the pure and nothing else: a snap guards ONE cell for ONE hour, so it
+    only pays if you know where they are going to be. You cannot predict a
+    step, a probe or a pickup. You CAN predict a pure — it is the one cell on
+    the board worth a smash-and-grab, so that is where they land. Aiming a snap
+    anywhere else is a guess; aiming it at a contested pure is a read.
+
+    Returns ``([(pure_cell, n_rival_eyes), ...], notes)`` sorted by eye count
+    descending: the more of them watching, the more certain the drop.
+    """
+    notes: List[str] = []
+
+    # Rival eyes, via the only extractor that reads the real channels.
+    eyes: List[Cell] = [tuple(r["at"]) for r in rival_eyes(agent_view)]
+
+    if not eyes:
+        notes.append("no rival probe anywhere in view — nothing to contest")
+        return [], notes
+
+    # Every pure in our LIVE vision. `pure_cells` is stripped from the seat
+    # view, but a pure is simply a red tile at full purity and `red_tiles`
+    # carries purity — so we see our own and any rival pure we have vision on.
+    found: List[Tuple[Cell, int]] = []
+    for t in (agent_view.get("red_tiles") or []):
+        if not isinstance(t, Mapping):
+            continue
+        if int(t.get("purity") or 0) < _PURE_MIN:
+            continue
+        cell = (int(t.get("x", -10 ** 6)), int(t.get("y", -10 ** 6)))
+        watchers = sum(
+            1 for (ex, ey) in eyes
+            if (ex - cell[0]) ** 2 + (ey - cell[1]) ** 2 <= _PROBE_VISION_R ** 2
+        )
+        if watchers:
+            found.append((cell, watchers))
+
+    if not found:
+        notes.append(
+            f"{len(eyes)} rival eye(s) in view, none within "
+            f"{_PROBE_VISION_R} of a pure we can see — no contested pure"
+        )
+        return [], notes
+
+    found.sort(key=lambda t: -t[1])
+    notes.append(
+        f"{len(found)} contested pure(s); strongest {list(found[0][0])} under "
+        f"{found[0][1]} rival eye(s)"
+    )
+    return found, notes
+
+
+def contested_pure_gate(n_eyes: int) -> Tuple[bool, str]:
+    """Always fires — the reason scales with how many of them can see it.
+
+    There is no weak case here the way there is for ``finder_gate``. Killing
+    one eye of three is one-in-many denial, but SNAPPING THE GROUND does not
+    care how many eyes are on it: the cell is hot for everyone, so the more of
+    them coming, the more landings get refused by the one charge.
+    """
+    if n_eyes >= 2:
+        return True, (
+            f"STRONG — {n_eyes} rival eyes cover this pure, so at least that "
+            "many seats have the read and a smash-and-grab queued. A snap makes "
+            "the CELL hot, not one unit: every landing into it this hour is "
+            "refused and every hull damaged. More watchers means more value "
+            "from the same 100 blue, not less"
+        )
+    return True, (
+        "STRONG — one rival eye covers this pure, so they have the read and "
+        "will drop on it at hour one. A snap refuses that landing outright and "
+        "damages the hull in orbit; they lose the harvester's whole night"
+    )
+
+
+# ── the denial value line — why weapons lose the menu ──────────────────────
+#
+# The menu prints a structured `yield:` line and TELLS the model to rank on it.
+# A weapon banks nothing, so it renders `yield: red ~+0 · blue 0 · green 0` —
+# and sits directly beneath a redsign block quantifying the alternative at
+# "a pure is worth ~+765, so the swing is ~1530". Measured: EYE_TAX offered 8
+# times, chosen 0. The model compared +0 with 1530 and was right to.
+#
+# Arguing in prose that "yield is the wrong axis" does not work, because the
+# prose is in WHY and the number is in the field being compared. So price the
+# denial ON THE SAME SCALE: what does the ground we are refusing them cost them?
+
+
+def denial_yield_line(
+    payload: Mapping[str, Any],
+    agent_view: Mapping[str, Any],
+) -> str:
+    """A `yield:` line for a weapon, priced in what the RIVAL loses.
+
+    Uses the harness's own `option_economics.yield_breakdown` over the ground
+    being denied, so the number is on the same scale as every other option's —
+    not a figure we invented.
+    """
+    cells = [tuple(c) for c in (payload.get("comb") or [])]
+    aim = [tuple(c) for c in (payload.get("aim") or [])]
+    ground = cells or aim
+    denied = 0
+    if ground:
+        try:
+            from . import option_economics
+            yb = option_economics.yield_breakdown(ground, agent_view) or {}
+            # `red_pts` is the key. This used to try ("red", "red_value",
+            # "value", "total") — none of which yield_breakdown returns — so it
+            # silently scored 0 every time and every weapon fell through to the
+            # wordy no-number fallback below. The whole point of the line is the
+            # number, so a wrong key here disables the fix it exists to be.
+            # Weighted exactly as packager._harvest_value does, to keep the
+            # figure on the same scale as the options it is compared against.
+            denied = int(round(
+                float(yb.get("red_pts") or 0)
+                + 0.5 * float(yb.get("blue_fissile") or 0)
+            ))
+        except Exception:                               # noqa: BLE001
+            denied = 0
+    weapon = str(payload.get("weapon") or "")
+    what = {"chaff": "their whole hour-one move",
+            "snap": "their landing, refused outright",
+            "emp": "8h of their vision and tempo"}.get(weapon, "their move")
+    if denied:
+        return (f"yield: WE BANK 0 — that is correct. DENIAL ~+{denied} taken "
+                f"OFF THEM ({what}). Rank this against what they gain if you "
+                f"do nothing, not against your own harvest")
+    return (f"yield: WE BANK 0 — that is correct. This buys {what}. A denial "
+            "option is priced in what the RIVAL loses; compare it with the "
+            "swing quoted in the redsign block, not with a chain")
+
+
+# ── pack ORDER — why a chosen weapon silently never fired ──────────────────
+#
+# `_pack_weapon` refuses when the hour it wants is already spent:
+#
+#   cut DEAD_HOUR: wanted hour 1 and 4 move(s) are already queued
+#
+# and it is right to. Position in `pk.moves` IS the hour, so firing late hits an
+# hour nobody was using. But the packer compiles options in THINKER ORDER, and a
+# thinker that lists a juice chain first spends H1-H4 on it — so the weapon it
+# also chose is cut before it ever reaches the wire. That is the whole of the
+# chosen-then-lost class: the model picked the play, the card shows it in
+# `[plan=...]`, and no `*_launch` appears in the moves.
+#
+# This is a LEGALITY reorder on the same footing as `_order_for_probe_support`,
+# not a preference: an hour-locked launch packed late is not a worse plan, it is
+# an impossible one. Nothing is dropped and nothing else is resequenced.
+
+
+def order_for_weapon_hours(
+    selected: Sequence[Any],
+    weapon_kinds: Sequence[str] = (),
+) -> Tuple[List[Any], List[str]]:
+    """Float hour-locked weapon plays ahead of free-floating runs.
+
+    Stable: weapon options sort to the front by their declared hour, everything
+    else keeps the thinker's order exactly. Returns ``(ordered, log)`` with an
+    empty log when nothing moved, so a normal night stays quiet.
+    """
+    kinds = set(weapon_kinds) or {p.kind for p in _plays()}
+    if not kinds:
+        return list(selected), []
+
+    def at_hour(opt: Any) -> int:
+        payload = getattr(opt, "payload", None) or {}
+        try:
+            return int(payload.get("at_hour") or 1)
+        except (TypeError, ValueError):
+            return 1
+
+    guns = [o for o in selected if str(getattr(o, "kind", "")) in kinds]
+    rest = [o for o in selected if str(getattr(o, "kind", "")) not in kinds]
+    if not guns or not rest:
+        return list(selected), []
+
+    guns.sort(key=at_hour)                       # stable; earliest hour first
+    ordered = guns + rest
+    if [id(o) for o in ordered] == [id(o) for o in selected]:
+        return list(selected), []
+
+    names = ", ".join(str(getattr(o, "option_id", "?")) for o in guns)
+    return ordered, [
+        f"packed {names} FIRST: position in the move list is the hour, so an "
+        "hour-locked launch queued behind a chain is cut for a spent hour "
+        "rather than fired late. Nothing else was resequenced."
+    ]
+
+
+def _plays() -> Sequence[Any]:
+    """`weapon_plays.PLAYS`, or empty when the module is not installed yet."""
+    try:
+        from . import weapon_plays
+        return tuple(weapon_plays.PLAYS)
+    except Exception:                                   # noqa: BLE001
+        return ()
+
+
+# ── combs — a reusable walk planner ────────────────────────────────────────
 # COMBS COME UP CONSTANTLY, so this is a first-class capability rather than a
 # per-play hack. Any weapon that darkens or denies ground and then wants to WORK
 # the ground it did not ruin needs the same three things: a legal contiguous
@@ -805,6 +1639,18 @@ def _pack_weapon(pk: Any, payload: Mapping[str, Any]) -> None:
     if not comb or not drop_at:
         return                                     # denial-only play: done
 
+    # Delayed comb (LIGHTS_DOWN small-smear path): hold the harvester off until
+    # the cloud clears. The launch is already queued; insert N waits so the drop
+    # lands on the first cool hour. The probe (emitted next by emit_chain's
+    # caller below) then sits one hour before the drop, exactly where a covering
+    # probe belongs.
+    try:
+        wait_before = int(payload.get("wait_before_drop") or 0)
+    except (TypeError, ValueError):
+        wait_before = 0
+    for _ in range(max(0, wait_before)):
+        pk.moves.append({"a": "wait"})
+
     unit = pk.next_harvester()
     if unit is None:
         pk.rollback(mark)
@@ -903,7 +1749,7 @@ def captions() -> Dict[str, str]:
     return {
         "emp_launch": "fired an EMP salvo",
         "chaff_flare": "flared chaff",
-        "snap": "fired a SNAP round",
+        "snap_launch": "fired a SNAP round",
     }
 
 

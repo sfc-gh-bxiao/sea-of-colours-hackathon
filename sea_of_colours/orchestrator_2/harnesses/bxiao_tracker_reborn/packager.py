@@ -976,6 +976,9 @@ def pack_recipe(
         selected_options or [], agent_view,
     )
     pk.log.extend(order_log)
+    # --- weapon-forge hook (installed by forge_install.py) ---
+    ordered, hour_log = weapon_forge.order_for_weapon_hours(ordered)
+    pk.log.extend(hour_log)
     # Fix 2.4, CORRECTED. This block used to hoist every harvester outing ahead
     # of every standalone probe, on the argument that a probe buys tomorrow
     # while an outing banks tonight. True as ADVICE, and not ours to impose:
