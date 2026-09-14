@@ -100,7 +100,59 @@ from .weapon_forge import EconomyPolicy, WeaponPlay
 # economy test is not observable at any sample size I can afford here. Both dials
 # serve ONE intervention — stop over-funding a rack we do not empty — so they are
 # tested as one change and reported as one.
-ECONOMY = EconomyPolicy(strong_chain_red_min=60, hold_at={"emp": 1})
+# ── ROUND 13: BUY THE HARVESTER, NOT THE CHARGE ───────────────────────────
+# Round 12 read the cards of 4 seasons on one seed and found the first lever with
+# a mechanism AND a consistent direction. In both duels we lost we were
+# out-dropped:
+#
+#     season          our drops/steps    theirs        result
+#     vs tracker          8 / 29         12 / 42       LOST -432
+#     vs v12             11 / 27         12 / 28       LOST -428
+#     vs emp_harvest     10 / 25         10 / 33       WON  +153
+#     4-seat FFA         10 / 24         11 / 32       WON
+#
+# Every drop is a landing and every step is a red cell banked, and RED is the only
+# thing `compute_player_score` credits. Against tracker they made 50% more
+# landings and 45% more steps. That is the 432 points.
+#
+# THE CAUSE. In that season they built TWO harvesters and we built one. Our orbit
+# card says the same thing five times a season:
+#
+#     deferred harvester build (need 1500c, have 1000c)
+#
+# The harvester is Priority 2 in orbit_policy — AHEAD of weapons (3) and probes
+# (4) — so it is not being outranked. It is unaffordable at the moment it is
+# offered, because the PREVIOUS nights' purchases drained the balance. Earlier
+# cards show nights at `have 1250c`: ONE skipped 250c purchase is the difference
+# between deferring and building.
+#
+# THE CHANGE. Take the fleet, not the ordnance:
+#   * emp  cap 0 — 250 credits a charge, and it has fired 5 times in ~92 seasons
+#                  with no measured gain (round 9: FIRED margin +234.3 vs
+#                  NOT-fired +268.9).
+#   * snap cap 0 — this is NEW spending the round-11 retrofit introduced. Before
+#                  it, `orbit_policy` had no `build_snap` at all so WET_PAINT was
+#                  free to declare. Now procurement exists and a declared snap
+#                  WILL be bought, making the credit squeeze worse, not better.
+#   * seek_blue_when_rack_empty=False — REQUIRED, not optional. With both caps at
+#                  0 the rack can never fill, and `blue_also_requested` returns
+#                  True whenever we hold none of any declared weapon
+#                  (weapon_forge.py:1229). Left True we would divert harvesters
+#                  to blue every single night for a purchase that can never
+#                  happen. This is the interaction that would have quietly
+#                  wrecked the experiment.
+#
+# The PLAYS below stay declared on purpose: the wiring, the trigger and the
+# rationale all remain live and verified, so re-arming is one line if the
+# harvester turns out not to pay.
+#
+# HONEST FRAMING: this partially unwinds rounds 1-11. That is what the evidence
+# says. The weapon is correct, safe, and has never been shown to earn its cost.
+ECONOMY = EconomyPolicy(
+    strong_chain_red_min=60,                  # round 9: keep harvesters on red
+    hold_at={"emp": 0, "snap": 0},            # round 13: no ordnance at all
+    seek_blue_when_rack_empty=False,          # round 13: see the note above
+)
 
 
 # ── round-2 targeting predicate ───────────────────────────────────────────
