@@ -65,6 +65,20 @@ This file is always-on context for AI agents; keep it lean and current.
   **`guide/leader.html` is the same document rendered** — a fan-out
   pair, so change both. The HTML is self-contained (it must open off
   disk) and sits beside `guide/index.html`, which links to it.
+- `guide/weapons.html` — the third guide, and the one for the day's
+  actual exercise: the **ten links** between blue in the ground and a
+  salvo in the air, as a tab per stage. It exists because "teach your
+  agent to use weapons" is not one change, it is ten, and each is
+  invisible until the one before it works — so a team that writes
+  doctrine on day one observes nothing and concludes the model is the
+  problem. Self-contained like its two siblings, both of which link to
+  it. **A fan-out surface with two edges**: it quotes weapon prices and
+  the blue cap from `game/weapons.py`, and it reproduces `soc weapons`
+  output verbatim, so a retune or a reworded rung strands it. Every
+  code snippet in it is real and pasted from the tree. It is a static
+  page and cannot report its own breakage — the stages live in a JS
+  array, so a broken one renders a tidy page with nothing in it. Run
+  `backstage/probes/_probe_weapons_guide.py` after touching it.
 
 ## Run & test
 
