@@ -1,0 +1,14 @@
+{
+  "team": "tata",
+  "name": "tracker",
+  "participants": [
+    "Ben Xiao",
+    "Youssef Hissou",
+    "Omar Akil",
+    "Kenny Lim",
+    "Brett Miller"
+  ],
+  "menu_label": "TATA_TRACKER — Hohenzollern-Tata agent (needs a Snowflake PAT · slow)",
+  "entry": "harness:run",
+  "needs_llm": true
+}
